@@ -124,6 +124,35 @@ const EMOJIS = {
     playful: '🐩', sleepy: '😴', confused: '🤔'
 };
 
+function renderTrace(trace) {
+    if (!trace || !trace.skill_id) return '';
+
+    const confidence = typeof trace.confidence === 'number'
+        ? `${Math.round(trace.confidence * 100)}%`
+        : 'n/a';
+
+    return `
+        <div class="cmd-tags" style="margin-top:10px">
+            <span class="cmd-tag">intent: ${trace.skill_id}</span>
+            <span class="cmd-tag">source: ${trace.planner_source || 'rule'}</span>
+            <span class="cmd-tag">confidence: ${confidence}</span>
+        </div>
+        <p style="font-size:11px;color:var(--text-muted);margin-top:6px">
+            ${trace.rationale || 'Used the constrained planner.'}
+        </p>
+    `;
+}
+
+function renderSentiment(sentiment) {
+    if (!sentiment || !sentiment.label) return '';
+
+    return `
+        <p style="font-size:11px;color:var(--text-muted);margin-top:6px">
+            affect: ${sentiment.affect} | sentiment: ${sentiment.label} (${sentiment.score})
+        </p>
+    `;
+}
+
 // ═══════════════════════════════════════════════════════════
 //  VOICE MODE
 // ═══════════════════════════════════════════════════════════
@@ -211,11 +240,19 @@ async function processVoiceCommand(text) {
                 html += `<p style="font-size:11px;color:var(--text-muted);margin-top:6px">⏱ ${data.delay}s delay between actions</p>`;
             }
         }
+        html += renderSentiment(data.sentiment);
+        html += renderTrace(data.trace);
         els.responseBubble.innerHTML = html;
 
         // Log everything
         data.commands?.forEach(cmd => addLog(`➤ ${cmd}`, 'cmd'));
         if (data.explanation) addLog(`🐾 ${data.explanation}`, 'robot');
+        if (data.sentiment?.label) {
+            addLog(`💬 sentiment=${data.sentiment.label} affect=${data.sentiment.affect} score=${data.sentiment.score}`, 'system');
+        }
+        if (data.trace?.skill_id) {
+            addLog(`🧠 intent=${data.trace.skill_id} via ${data.trace.planner_source || 'rule'} (${Math.round((data.trace.confidence || 0) * 100)}%)`, 'system');
+        }
 
         data.serial_responses?.forEach(sr => {
             if (sr.blocked) {
@@ -487,6 +524,12 @@ async function sendManualCommand(cmd) {
             const data = await res.json();
             data.commands?.forEach(c => addLog(`➤ ${c}`, 'cmd'));
             if (data.explanation) addLog(`🐾 ${data.explanation}`, 'robot');
+            if (data.sentiment?.label) {
+                addLog(`💬 sentiment=${data.sentiment.label} affect=${data.sentiment.affect}`, 'system');
+            }
+            if (data.trace?.skill_id) {
+                addLog(`🧠 intent=${data.trace.skill_id} via ${data.trace.planner_source || 'rule'}`, 'system');
+            }
         }
     } catch (e) {
         addLog(`Error: ${e.message}`, 'error');

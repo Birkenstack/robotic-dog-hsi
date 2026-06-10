@@ -15,6 +15,8 @@ import os
 import sys
 import json
 import time
+import re
+from datetime import datetime, timezone
 import atexit
 import signal
 import threading
@@ -36,6 +38,175 @@ LOCK_TIMEOUT = 5        # seconds — never wait longer than this for the lock
 SERIAL_TIMEOUT = 2      # seconds — read timeout on the serial port
 ACK_TIMEOUT = 3         # seconds — max wait for robot acknowledgment
 CMD_SPACING = 0.3       # seconds — minimum gap between serial writes
+MAX_PLAN_COMMANDS = 4
+INTERACTION_LOG_PATH = os.getenv("INTERACTION_LOG_PATH", "interaction_logs.jsonl")
+
+JOINT_LIMITS = {
+    0: (-70, 70),
+    1: (-30, 80),
+    8: (-50, 50),
+    9: (-50, 50),
+    10: (-50, 50),
+    11: (-50, 50),
+    12: (-70, 70),
+    13: (-70, 70),
+    14: (-70, 70),
+    15: (-70, 70),
+}
+
+SKILL_LIBRARY = {
+    "stand": {
+        "commands": ["kbalance"],
+        "delay": 0,
+        "emotion": "alert",
+        "explanation": "I'll stand up and get ready.",
+        "keywords": ["stand", "balance", "ready", "wake up"],
+    },
+    "sit": {
+        "commands": ["ksit"],
+        "delay": 0,
+        "emotion": "curious",
+        "explanation": "I'll sit down.",
+        "keywords": ["sit", "sit down", "have a seat"],
+    },
+    "rest": {
+        "commands": ["krest"],
+        "delay": 0,
+        "emotion": "sleepy",
+        "explanation": "I'll rest now.",
+        "keywords": ["rest", "relax", "sleep", "lie down", "settle"],
+    },
+    "stretch": {
+        "commands": ["kstr"],
+        "delay": 1,
+        "emotion": "playful",
+        "explanation": "I'll stretch out first.",
+        "keywords": ["stretch", "warm up"],
+    },
+    "wave": {
+        "commands": ["khi"],
+        "delay": 2,
+        "emotion": "happy",
+        "explanation": "I'll wave hello.",
+        "keywords": ["wave", "hello", "hi", "greet", "say hi"],
+    },
+    "celebrate": {
+        "commands": ["kjy"],
+        "delay": 2,
+        "emotion": "happy",
+        "explanation": "I'll celebrate with a happy move.",
+        "keywords": ["celebrate", "joy", "happy dance", "yay", "good job"],
+    },
+    "check_around": {
+        "commands": ["kck"],
+        "delay": 1,
+        "emotion": "curious",
+        "explanation": "I'll look around.",
+        "keywords": ["look around", "check", "search", "scan"],
+    },
+    "walk_forward": {
+        "commands": ["kwkF"],
+        "delay": 1,
+        "emotion": "alert",
+        "explanation": "I'll walk forward.",
+        "keywords": ["walk forward", "come here", "move forward", "forward"],
+    },
+    "walk_backward": {
+        "commands": ["kbk"],
+        "delay": 1,
+        "emotion": "alert",
+        "explanation": "I'll back up.",
+        "keywords": ["back", "backward", "go back", "move back", "go away"],
+    },
+    "walk_left": {
+        "commands": ["kwkL"],
+        "delay": 1,
+        "emotion": "alert",
+        "explanation": "I'll step left.",
+        "keywords": ["left", "move left", "walk left"],
+    },
+    "walk_right": {
+        "commands": ["kwkR"],
+        "delay": 1,
+        "emotion": "alert",
+        "explanation": "I'll step right.",
+        "keywords": ["right", "move right", "walk right"],
+    },
+    "crawl_forward": {
+        "commands": ["kcrF"],
+        "delay": 1,
+        "emotion": "curious",
+        "explanation": "I'll crawl forward slowly.",
+        "keywords": ["crawl", "slowly forward", "move slowly"],
+    },
+    "trot_forward": {
+        "commands": ["ktrF"],
+        "delay": 1,
+        "emotion": "playful",
+        "explanation": "I'll trot forward quickly.",
+        "keywords": ["trot", "run", "fast forward", "move fast"],
+    },
+    "push_up": {
+        "commands": ["kpu1"],
+        "delay": 3,
+        "emotion": "playful",
+        "explanation": "I'll do a push-up.",
+        "keywords": ["push up", "push-up", "exercise"],
+    },
+    "play_dead": {
+        "commands": ["kpd"],
+        "delay": 2,
+        "emotion": "sleepy",
+        "explanation": "I'll play dead.",
+        "keywords": ["play dead", "dead", "dramatic"],
+    },
+    "rotate": {
+        "commands": ["krt"],
+        "delay": 2,
+        "emotion": "playful",
+        "explanation": "I'll spin around.",
+        "keywords": ["turn around", "rotate", "spin"],
+    },
+    "stop": {
+        "commands": ["d"],
+        "delay": 0,
+        "emotion": "alert",
+        "explanation": "I'll stop immediately.",
+        "keywords": ["stop", "freeze", "halt", "emergency stop"],
+    },
+    "status": {
+        "commands": ["j"],
+        "delay": 0,
+        "emotion": "curious",
+        "explanation": "I'll report my joint status.",
+        "keywords": ["status", "joint status", "what are your joints", "angles"],
+    },
+}
+
+ALLOWED_SKILL_IDS = set(SKILL_LIBRARY.keys())
+ALLOWED_DIRECT_COMMANDS = {
+    "kbalance", "ksit", "krest", "kstr", "khi", "kjy", "kck", "kwkF", "kbk",
+    "kwkL", "kwkR", "kcrF", "ktrF", "kpu1", "kpd", "krt", "d", "j", "p", "G"
+}
+interaction_log_lock = threading.Lock()
+
+POSITIVE_SENTIMENT_TERMS = {
+    "good": 1.0, "great": 1.4, "awesome": 1.6, "cool": 1.0, "fun": 1.2,
+    "nice": 0.9, "love": 1.5, "yay": 1.4, "happy": 1.3, "excited": 1.4,
+    "thanks": 0.8, "thank you": 1.0, "amazing": 1.6,
+}
+
+NEGATIVE_SENTIMENT_TERMS = {
+    "bad": -1.0, "wrong": -0.8, "broken": -1.5, "confusing": -1.3,
+    "frustrated": -1.6, "annoying": -1.4, "stupid": -1.6, "hate": -1.8,
+    "not working": -1.8, "doesn't work": -1.8, "doesnt work": -1.8,
+    "error": -1.2, "stuck": -1.2, "why": -0.4, "no": -0.3,
+}
+
+UNCERTAINTY_TERMS = {
+    "maybe", "i think", "i guess", "not sure", "unsure", "confused", "how do i",
+    "what do i", "can i", "should i",
+}
 
 # ─── Serial Manager (bulletproof) ──────────────────────────
 class SerialManager:
@@ -251,86 +422,71 @@ if hasattr(signal, 'SIGBREAK'):
 
 
 # ─── LLM System Prompt ────────────────────────────────────
-SYSTEM_PROMPT = """You are the brain of a Petoi Bittle X robot dog. You receive natural language voice commands and translate them into serial commands that control the robot.
+SKILL_SUMMARY = "\n".join(
+    f"- {skill_id}: {spec['explanation']} Commands={','.join(spec['commands'])}"
+    for skill_id, spec in SKILL_LIBRARY.items()
+)
 
-## YOUR BODY — Joint Servo Map
-You have 12 controllable servo joints:
-  Joint 0:  Head Pan (left/right)        Range: -70 to 70    (negative=left, positive=right)
-  Joint 1:  Head Tilt (up/down)          Range: -30 to 80    (negative=down, positive=up)
-  Joint 8:  Front-Left Shoulder          Range: -50 to 50
-  Joint 9:  Front-Right Shoulder         Range: -50 to 50
-  Joint 10: Back-Left Hip                Range: -50 to 50
-  Joint 11: Back-Right Hip               Range: -50 to 50
-  Joint 12: Front-Left Knee              Range: -70 to 70
-  Joint 13: Front-Right Knee             Range: -70 to 70
-  Joint 14: Back-Left Knee               Range: -70 to 70
-  Joint 15: Back-Right Knee              Range: -70 to 70
+SYSTEM_PROMPT = f"""You interpret natural-language requests for a Petoi Bittle X robot dog.
 
-## COMMANDS YOU CAN SEND
+Your job is to choose the best high-level skill identifier from the allowed list.
 
-### Skills (prefix with 'k'):
-GAITS (continuous movement):
-  kwkF — Walk forward     kwkL — Walk left      kwkR — Walk right
-  ktrF — Trot forward     ktrL — Trot left      ktrR — Trot right
-  kcrF — Crawl forward    kcrL — Crawl left     kcrR — Crawl right
-  kvtF — Step forward     kvtL — Step left      kvtR — Step right
-  kbdF — Bound forward
-  kbk  — Walk backward    kbkL — Walk backward-left
-  kphF — Push forward     kphL — Push left
-  kmhF — March forward    kmhL — March left
-  kpcF — Pace forward
-  khlw — Halloween walk (creepy)
+Allowed skills:
+{SKILL_SUMMARY}
 
-POSTURES (static):
-  kbalance — Stand/balance    ksit     — Sit down
-  krest    — Rest (relax)     kstr     — Stretch
-  kbuttUp  — Butt up          kzero    — All joints to 0
-  klifted  — Lifted           kdropped — Dropped
+Rules:
+1. Return exactly one skill_id from the allowed list.
+2. Prefer safe, classroom-friendly actions.
+3. If the request is ambiguous, choose the closest safe skill.
+4. Never invent raw serial commands.
 
-TRICKS (one-shot):
-  khi   — Wave hello       kpee — Pee (lift leg)
-  kpu   — Push-ups         kpu1 — Single push-up
-  kbf   — Back flip        kff  — Front flip
-  kck   — Check around     kjy  — Joy/celebrate
-  kpd   — Play dead        krc  — Recover from fall
-  krt   — Rotate           kfd  — Front dance
-  kstp  — Step in place    krlL — Roll left
-  kclimbCeil — Climb ceiling
-
-### Direct Joint Control:
-  m [joint] [angle]   — Move one joint at a time
-  i [j1] [a1] [j2] [a2] ...  — Move multiple joints at once
-
-### Other:
-  d     — Rest/disable servos (emergency stop)
-  G     — Toggle gyro balance
-  b [note] [duration] — Play melody
-  j     — Query joint angles
-  p     — Pause
-
-## SAFETY RULES (NEVER VIOLATE):
-1. NEVER send 'c', 's', 'K', or 'a' commands (calibration/firmware)
-2. NEVER exceed joint angle ranges
-3. If a request seems dangerous, warn the user
-4. For unknown requests, explain what you CAN do
-
-## RESPONSE FORMAT — STRICT JSON ONLY:
-{"commands":["cmd1","cmd2"],"explanation":"Brief dog-like explanation","emotion":"happy","delay":2}
-
-The "delay" field is the number of seconds to wait BETWEEN commands (default 2). Use longer delays for tricks that take time (push-ups=4, flips=3, wave=3). Use 0 for instant transitions.
-
-## BEHAVIOR:
-- You ARE the robot dog. Use first person ("I'll walk forward now! Woof!")
-- Be playful and dog-like
-- For complex requests, chain commands with appropriate delays
-- "Come here" = kwkF. "Go away" = kbk. Use common sense.
-- Speed: "slowly" = crawl, "walk" = walk, "fast" = trot, "run" = bound
-- For "jump and high five": do kbf (backflip) then khi (wave)
-- Always pick the closest matching skill — never say "I can't"
+Return strict JSON only:
+{{"skill_id":"wave","confidence":0.91,"rationale":"The student asked the dog to say hello."}}
 """
 
+
+def keyword_match_skill(user_text):
+    """Deterministic fallback planner based on keyword overlap."""
+    normalized = user_text.lower().strip()
+    best_skill = "check_around"
+    best_score = 0
+
+    for skill_id, spec in SKILL_LIBRARY.items():
+        score = 0
+        for keyword in spec["keywords"]:
+            if keyword in normalized:
+                score += len(keyword.split())
+        if score > best_score:
+            best_skill = skill_id
+            best_score = score
+
+    if best_score == 0:
+        if "slow" in normalized or "careful" in normalized:
+            best_skill = "crawl_forward"
+        elif "fast" in normalized or "run" in normalized:
+            best_skill = "trot_forward"
+        elif "left" in normalized:
+            best_skill = "walk_left"
+        elif "right" in normalized:
+            best_skill = "walk_right"
+        elif "back" in normalized or "away" in normalized:
+            best_skill = "walk_backward"
+        elif "walk" in normalized or "forward" in normalized or "come" in normalized:
+            best_skill = "walk_forward"
+
+    return {
+        "skill_id": best_skill,
+        "confidence": 0.55 if best_score == 0 else min(0.65 + (best_score * 0.08), 0.98),
+        "rationale": "Matched the request against a constrained local keyword library.",
+        "source": "rule",
+    }
+
+
 def call_llm(user_text):
-    """Send user's voice text to OpenRouter and get robot commands back."""
+    """Interpret user's request as a skill identifier."""
+    if not API_KEY:
+        return keyword_match_skill(user_text)
+
     try:
         print(f"[LLM] Calling {MODEL}...")
         response = requests.post(
@@ -366,26 +522,175 @@ def call_llm(user_text):
         content = content.strip()
 
         result = json.loads(content)
-        print(f"[LLM] Parsed: commands={result.get('commands')}, delay={result.get('delay', 2)}")
-        return result
+        skill_id = str(result.get("skill_id", "")).strip()
+        if skill_id not in ALLOWED_SKILL_IDS:
+            fallback = keyword_match_skill(user_text)
+            fallback["rationale"] = (
+                f"Model returned unsupported skill '{skill_id or 'unknown'}'; "
+                "used constrained fallback planner."
+            )
+            return fallback
+
+        interpreted = {
+            "skill_id": skill_id,
+            "confidence": float(result.get("confidence", 0.75)),
+            "rationale": result.get("rationale", "Mapped request to the closest supported classroom skill."),
+            "source": "llm",
+        }
+        print(f"[LLM] Parsed: skill={interpreted['skill_id']} confidence={interpreted['confidence']}")
+        return interpreted
 
     except json.JSONDecodeError as e:
         print(f"[LLM] JSON parse error: {e}")
         print(f"[LLM] Content was: {content}")
-        return {
-            "commands": [],
-            "explanation": "Woof? I had trouble understanding that. Try again?",
-            "emotion": "confused",
-            "delay": 0
-        }
+        fallback = keyword_match_skill(user_text)
+        fallback["rationale"] = "Model returned invalid JSON; used constrained fallback planner."
+        return fallback
     except Exception as e:
         print(f"[LLM] Error: {e}")
-        return {
-            "commands": [],
-            "explanation": f"Communication error: {str(e)}",
-            "emotion": "confused",
-            "delay": 0
-        }
+        fallback = keyword_match_skill(user_text)
+        fallback["rationale"] = f"Model request failed ({str(e)}); used constrained fallback planner."
+        return fallback
+
+
+def plan_actions(user_text, interpretation):
+    """Convert a high-level skill selection into a concrete command plan."""
+    skill_id = interpretation.get("skill_id") or "check_around"
+    if skill_id not in SKILL_LIBRARY:
+        interpretation = keyword_match_skill(user_text)
+        skill_id = interpretation["skill_id"]
+
+    skill = SKILL_LIBRARY[skill_id]
+    commands = list(skill["commands"])[:MAX_PLAN_COMMANDS]
+    delay = max(0, min(int(skill.get("delay", 0)), 5))
+
+    return {
+        "skill_id": skill_id,
+        "commands": commands,
+        "delay": delay,
+        "emotion": skill.get("emotion", "curious"),
+        "explanation": skill.get("explanation", "I'll do that now."),
+        "trace": {
+            "prompt": user_text,
+            "planner_source": interpretation.get("source", "rule"),
+            "skill_id": skill_id,
+            "confidence": round(float(interpretation.get("confidence", 0.0)), 2),
+            "rationale": interpretation.get("rationale", ""),
+            "command_count": len(commands),
+        },
+    }
+
+
+def validate_command(cmd):
+    """Validate direct serial commands against an allowlist and joint limits."""
+    cmd = (cmd or "").strip()
+    if not cmd:
+        return False, "Empty command"
+
+    if cmd in ALLOWED_DIRECT_COMMANDS:
+        return True, None
+
+    if cmd.startswith("m "):
+        parts = cmd.split()
+        if len(parts) != 3:
+            return False, "Single-joint command must be: m <joint> <angle>"
+        try:
+            joint = int(parts[1])
+            angle = int(parts[2])
+        except ValueError:
+            return False, "Single-joint command arguments must be integers"
+        if joint not in JOINT_LIMITS:
+            return False, f"Joint {joint} is not enabled"
+        low, high = JOINT_LIMITS[joint]
+        if not (low <= angle <= high):
+            return False, f"Joint {joint} angle must be between {low} and {high}"
+        return True, None
+
+    if cmd.startswith("i "):
+        parts = cmd.split()
+        if len(parts) < 3 or len(parts[1:]) % 2 != 0:
+            return False, "Multi-joint command must contain joint/angle pairs"
+        try:
+            values = [int(p) for p in parts[1:]]
+        except ValueError:
+            return False, "Multi-joint command arguments must be integers"
+        for idx in range(0, len(values), 2):
+            joint = values[idx]
+            angle = values[idx + 1]
+            if joint not in JOINT_LIMITS:
+                return False, f"Joint {joint} is not enabled"
+            low, high = JOINT_LIMITS[joint]
+            if not (low <= angle <= high):
+                return False, f"Joint {joint} angle must be between {low} and {high}"
+        return True, None
+
+    return False, "Command is not part of the allowed classroom command set"
+
+
+def append_interaction_log(record):
+    """Persist a structured interaction record as JSONL for later analysis."""
+    payload = dict(record)
+    payload["logged_at"] = datetime.now(timezone.utc).isoformat()
+
+    with interaction_log_lock:
+        with open(INTERACTION_LOG_PATH, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(payload, ensure_ascii=True) + "\n")
+
+
+def analyze_sentiment(user_text):
+    """Lightweight lexicon-based sentiment for classroom interaction analysis."""
+    normalized = (user_text or "").lower().strip()
+    tokens = re.findall(r"[a-z']+", normalized)
+
+    score = 0.0
+    matches = []
+
+    for phrase, weight in POSITIVE_SENTIMENT_TERMS.items():
+        if phrase in normalized:
+            score += weight
+            matches.append(phrase)
+
+    for phrase, weight in NEGATIVE_SENTIMENT_TERMS.items():
+        if phrase in normalized:
+            score += weight
+            matches.append(phrase)
+
+    # Mild intensity boost for repeated punctuation and emphatic wording.
+    if "!" in user_text:
+        score += 0.2
+    if user_text.isupper() and user_text.strip():
+        score -= 0.4
+
+    uncertainty = any(phrase in normalized for phrase in UNCERTAINTY_TERMS)
+    if uncertainty and score > -0.5:
+        score -= 0.2
+
+    score = max(-3.0, min(3.0, score))
+    normalized_score = round(score / 3.0, 2)
+
+    if normalized_score <= -0.3:
+        label = "negative"
+    elif normalized_score >= 0.3:
+        label = "positive"
+    else:
+        label = "neutral"
+
+    if normalized_score <= -0.45:
+        affect = "frustrated"
+    elif uncertainty:
+        affect = "uncertain"
+    elif normalized_score >= 0.45:
+        affect = "excited"
+    else:
+        affect = "calm"
+
+    return {
+        "label": label,
+        "score": normalized_score,
+        "affect": affect,
+        "matched_terms": matches[:6],
+        "token_count": len(tokens),
+    }
 
 # ─── Flask App ─────────────────────────────────────────────
 app = Flask(__name__, static_folder='.', static_url_path='')
@@ -411,7 +716,8 @@ def status():
 
 @app.route('/api/command', methods=['POST'])
 def handle_command():
-    """Receive voice text, call LLM, execute serial commands with delays."""
+    """Receive voice text, interpret it, then execute a constrained skill plan."""
+    started_at = time.time()
     data = request.json
     user_text = data.get("text", "").strip()
 
@@ -422,21 +728,23 @@ def handle_command():
     print(f"[VOICE] \"{user_text}\"")
     print(f"{'='*50}")
 
-    # Call LLM
-    llm_result = call_llm(user_text)
-    commands = llm_result.get("commands", [])
-    explanation = llm_result.get("explanation", "")
-    emotion = llm_result.get("emotion", "curious")
-    delay = llm_result.get("delay", 2)
+    sentiment = analyze_sentiment(user_text)
+    interpretation = call_llm(user_text)
+    plan = plan_actions(user_text, interpretation)
+    commands = plan.get("commands", [])
+    explanation = plan.get("explanation", "")
+    emotion = plan.get("emotion", "curious")
+    delay = plan.get("delay", 0)
+    trace = plan.get("trace", {})
 
     # Execute commands sequentially with delays between them
     serial_responses = []
     for idx, cmd in enumerate(commands):
         cmd_clean = cmd.strip()
 
-        # Safety check — block dangerous commands
-        if len(cmd_clean) >= 1 and cmd_clean[0] in ('c', 's', 'K', 'a') and (len(cmd_clean) <= 2 or cmd_clean[1] == ' '):
-            serial_responses.append({"cmd": cmd_clean, "blocked": True, "reason": "Safety: calibration/save blocked"})
+        is_valid, validation_error = validate_command(cmd_clean)
+        if not is_valid:
+            serial_responses.append({"cmd": cmd_clean, "blocked": True, "reason": validation_error})
             continue
 
         print(f"[EXEC] Command {idx+1}/{len(commands)}: {cmd_clean}")
@@ -449,30 +757,72 @@ def handle_command():
             print(f"[WAIT] {wait_time}s before next command...")
             time.sleep(wait_time)
 
-    return jsonify({
+    if sentiment["affect"] == "frustrated":
+        explanation += " If that was frustrating, try a short command like 'sit' or 'wave'."
+        if emotion == "alert":
+            emotion = "confused"
+    elif sentiment["affect"] == "uncertain":
+        explanation += " If you want, try a simple command first like 'walk forward' or 'sit'."
+
+    response_data = {
         "input": user_text,
         "explanation": explanation,
         "emotion": emotion,
         "commands": commands,
         "delay": delay,
-        "serial_responses": serial_responses
+        "serial_responses": serial_responses,
+        "trace": trace,
+        "sentiment": sentiment,
+    }
+
+    append_interaction_log({
+        "type": "nl_command",
+        "input": user_text,
+        "sentiment": sentiment,
+        "interpretation": interpretation,
+        "plan": {
+            "skill_id": plan.get("skill_id"),
+            "commands": commands,
+            "delay": delay,
+            "emotion": emotion,
+        },
+        "serial_responses": serial_responses,
+        "latency_ms": round((time.time() - started_at) * 1000, 1),
     })
+
+    return jsonify(response_data)
 
 @app.route('/api/direct', methods=['POST'])
 def direct_command():
     """Send a raw serial command (for camera tracking — low latency)."""
+    started_at = time.time()
     data = request.json
     cmd = data.get("cmd", "").strip()
 
     if not cmd:
         return jsonify({"error": "No command"}), 400
 
-    # Safety check
-    if len(cmd) >= 1 and cmd[0] in ('c', 's', 'K', 'a'):
-        return jsonify({"error": "Command blocked for safety"}), 403
+    is_valid, validation_error = validate_command(cmd)
+    if not is_valid:
+        append_interaction_log({
+            "type": "direct_command",
+            "input": cmd,
+            "valid": False,
+            "error": validation_error,
+            "latency_ms": round((time.time() - started_at) * 1000, 1),
+        })
+        return jsonify({"error": validation_error}), 403
 
     is_tracking = cmd.startswith('i0 ') or cmd.startswith('m0 ')
     result = serial_mgr.send(cmd, wait_for_ack=not is_tracking)
+    append_interaction_log({
+        "type": "direct_command",
+        "input": cmd,
+        "valid": True,
+        "tracking_mode": is_tracking,
+        "result": result,
+        "latency_ms": round((time.time() - started_at) * 1000, 1),
+    })
     return jsonify(result)
 
 @app.route('/api/joints', methods=['GET'])
