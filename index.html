@@ -4,13 +4,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Petoi Bittle X — AI Controller</title>
-    <meta name="description" content="Voice and camera AI controller for Petoi Bittle X robot dog">
+    <meta name="description" content="Multimodal AI controller for Petoi Bittle X robot dog">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <!-- Header -->
     <header class="header">
         <div class="header-left">
             <div class="logo">
@@ -20,20 +19,8 @@
             </div>
         </div>
         <div class="header-center">
-            <div class="mode-toggle">
-                <button class="mode-btn active" data-mode="voice" id="btn-voice-mode">
-                    <span class="mode-icon">🎤</span>
-                    <span>Voice</span>
-                </button>
-                <button class="mode-btn" data-mode="camera" id="btn-camera-mode">
-                    <span class="mode-icon">📷</span>
-                    <span>Camera</span>
-                </button>
-                <button class="mode-btn" data-mode="manual" id="btn-manual-mode">
-                    <span class="mode-icon">⌨️</span>
-                    <span>Manual</span>
-                </button>
-                <div class="mode-slider"></div>
+            <div class="workspace-hint">
+                Voice, text, and camera in one workspace.
             </div>
         </div>
         <div class="header-right">
@@ -49,103 +36,83 @@
         </div>
     </header>
 
-    <!-- Main Content -->
     <main class="main-content">
-        <!-- Voice Mode Panel -->
-        <section class="mode-panel active" id="panel-voice">
-            <div class="voice-area">
-                <div class="mic-container" id="mic-container">
-                    <div class="mic-rings">
-                        <div class="mic-ring ring-1"></div>
-                        <div class="mic-ring ring-2"></div>
-                        <div class="mic-ring ring-3"></div>
+        <section class="workspace-shell">
+            <section class="workspace-main">
+                <div class="workspace-intro">
+                    <div>
+                        <p class="eyebrow">Explainable AI Literacy</p>
+                        <h1>See how prompts become robot actions.</h1>
                     </div>
-                    <button class="mic-btn" id="btn-mic">
-                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
-                            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
-                            <line x1="12" y1="19" x2="12" y2="23"/>
-                            <line x1="8" y1="23" x2="16" y2="23"/>
-                        </svg>
-                    </button>
+                    <p class="workspace-copy">
+                        Students can type or speak a command, view the interpreted plan, and watch the robot respond.
+                    </p>
                 </div>
-                <p class="mic-status" id="mic-status">Click to start listening</p>
-                <div class="live-transcript" id="live-transcript"></div>
-            </div>
 
-            <!-- Robot Response -->
-            <div class="robot-response" id="robot-response">
-                <div class="robot-avatar">
-                    <span class="robot-emoji" id="robot-emoji">🐕</span>
-                </div>
-                <div class="response-bubble" id="response-bubble">
-                    <p>Ready for your commands! Try saying "walk forward" or "wave hello"</p>
-                </div>
-            </div>
-        </section>
-
-        <!-- Camera Mode Panel -->
-        <section class="mode-panel" id="panel-camera">
-            <div class="camera-area">
-                <div class="camera-container">
-                    <video id="camera-feed" autoplay playsinline muted></video>
-                    <canvas id="camera-overlay"></canvas>
-                    <div class="camera-info">
-                        <div class="tracking-status" id="tracking-status">
-                            <span class="tracking-dot"></span>
-                            <span>No face detected</span>
+                <div class="workspace-steps workspace-card">
+                    <div class="step-card">
+                        <span class="step-number">1</span>
+                        <div>
+                            <p class="step-title">Give a prompt</p>
+                            <p class="step-copy">Use voice or text to ask the robot to do something simple or chained.</p>
+                        </div>
+                    </div>
+                    <div class="step-card">
+                        <span class="step-number">2</span>
+                        <div>
+                            <p class="step-title">See the plan</p>
+                            <p class="step-copy">The system shows how it interpreted the request before or during execution.</p>
+                        </div>
+                    </div>
+                    <div class="step-card">
+                        <span class="step-number">3</span>
+                        <div>
+                            <p class="step-title">Observe the result</p>
+                            <p class="step-copy">Students compare the prompt, the chosen plan, and the robot’s behavior.</p>
                         </div>
                     </div>
                 </div>
-                <div class="camera-controls">
-                    <button class="cam-btn" id="btn-start-camera">
-                        <span>📷</span> Start Camera
-                    </button>
-                    <div class="cam-settings">
-                        <label class="cam-setting">
-                            <span>Tracking Speed</span>
-                            <input type="range" id="tracking-speed" min="1" max="10" value="5">
-                        </label>
-                        <label class="cam-setting">
-                            <span>Pan Range</span>
-                            <input type="range" id="pan-range" min="20" max="70" value="50">
-                        </label>
-                        <label class="cam-setting">
-                            <span>Tilt Range</span>
-                            <input type="range" id="tilt-range" min="15" max="60" value="40">
-                        </label>
-                    </div>
-                </div>
-            </div>
-            <div class="servo-display">
-                <div class="servo-gauge">
-                    <span class="servo-label">Pan (L/R)</span>
-                    <div class="gauge-bar">
-                        <div class="gauge-fill" id="gauge-pan"></div>
-                        <div class="gauge-marker" id="gauge-pan-marker"></div>
-                    </div>
-                    <span class="servo-value" id="servo-pan-value">0°</span>
-                </div>
-                <div class="servo-gauge">
-                    <span class="servo-label">Tilt (U/D)</span>
-                    <div class="gauge-bar">
-                        <div class="gauge-fill" id="gauge-tilt"></div>
-                        <div class="gauge-marker" id="gauge-tilt-marker"></div>
-                    </div>
-                    <span class="servo-value" id="servo-tilt-value">0°</span>
-                </div>
-            </div>
-        </section>
 
-        <!-- Manual Mode Panel -->
-        <section class="mode-panel" id="panel-manual">
-            <div class="manual-area">
-                <div class="manual-input-row">
-                    <input type="text" class="manual-input" id="manual-input" placeholder="Type a command (e.g. ksit, kwkF, m0 30)..." autocomplete="off">
-                    <button class="send-btn" id="btn-send-manual">Send</button>
+                <div class="composer-card">
+                    <div class="composer-header">
+                        <div>
+                            <p class="composer-title">1. Student Input</p>
+                            <p class="composer-subtitle">Type or speak a request in everyday language.</p>
+                        </div>
+                        <div class="mic-inline">
+                            <div class="mic-container" id="mic-container">
+                                <div class="mic-rings">
+                                    <div class="mic-ring ring-1"></div>
+                                    <div class="mic-ring ring-2"></div>
+                                    <div class="mic-ring ring-3"></div>
+                                </div>
+                                <button class="mic-btn" id="btn-mic" title="Start voice input">
+                                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                                        <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                                        <line x1="12" y1="19" x2="12" y2="23"/>
+                                        <line x1="8" y1="23" x2="16" y2="23"/>
+                                    </svg>
+                                </button>
+                            </div>
+                            <div class="mic-inline-copy">
+                                <p class="mic-status" id="mic-status">Click to start listening</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="manual-input-row">
+                        <input type="text" class="manual-input" id="manual-input" placeholder="Try: walk forward and wave" autocomplete="off">
+                        <button class="send-btn" id="btn-send-manual">Send</button>
+                    </div>
+                    <div class="live-transcript" id="live-transcript"></div>
                 </div>
-                <div class="quick-commands">
-                    <h3>Quick Commands</h3>
+
+                <div class="quick-commands workspace-card">
+                    <div class="section-heading">
+                        <h3>Try Example Skills</h3>
+                        <p>Use these as starter prompts or compare them with student-created commands.</p>
+                    </div>
                     <div class="cmd-grid">
                         <button class="cmd-btn" data-cmd="kbalance">🧍 Stand</button>
                         <button class="cmd-btn" data-cmd="ksit">🪑 Sit</button>
@@ -157,32 +124,109 @@
                         <button class="cmd-btn" data-cmd="kwkL">↩️ Left</button>
                         <button class="cmd-btn" data-cmd="kwkR">↪️ Right</button>
                         <button class="cmd-btn" data-cmd="khi">👋 Wave</button>
-                        <button class="cmd-btn" data-cmd="kpu">💪 Push-up</button>
+                        <button class="cmd-btn" data-cmd="do the 67 meme">67</button>
+                        <button class="cmd-btn" data-cmd="kpu1">💪 Push-up</button>
                         <button class="cmd-btn" data-cmd="kpd">💀 Play Dead</button>
                         <button class="cmd-btn" data-cmd="kjy">🎉 Joy</button>
-                        <button class="cmd-btn" data-cmd="kbf">🔄 Backflip</button>
-                        <button class="cmd-btn" data-cmd="kpee">🦵 Pee</button>
+                        <button class="cmd-btn" data-cmd="krt">🔄 Rotate</button>
                         <button class="cmd-btn" data-cmd="kstr">🙆 Stretch</button>
-                        <button class="cmd-btn" data-cmd="khlw">🎃 Spooky</button>
                         <button class="cmd-btn" data-cmd="d">⛔ Stop</button>
                     </div>
                 </div>
-            </div>
-        </section>
 
-        <!-- Command Log (shared) -->
-        <aside class="command-log">
-            <div class="log-header">
-                <h3>📋 Command Log</h3>
-                <button class="log-clear" id="btn-clear-log">Clear</button>
-            </div>
-            <div class="log-entries" id="log-entries">
-                <div class="log-entry log-system">
-                    <span class="log-time">--:--</span>
-                    <span class="log-msg">System initialized. Waiting for connection...</span>
+                <div class="robot-response workspace-card" id="robot-response">
+                    <div class="robot-avatar">
+                        <span class="robot-emoji" id="robot-emoji">🐕</span>
+                    </div>
+                    <div class="response-shell">
+                        <div class="section-heading response-heading">
+                            <h3>2. Interpreted Plan and Result</h3>
+                            <p>The interface explains what the system selected and why.</p>
+                        </div>
+                        <div class="response-bubble" id="response-bubble">
+                            <p>Ready. The next command will appear here with the selected plan and robot response.</p>
+                        </div>
+                    </div>
                 </div>
-            </div>
-        </aside>
+            </section>
+
+            <aside class="workspace-sidebar">
+                <section class="workspace-card camera-card">
+                    <div class="camera-card-header">
+                        <div>
+                            <p class="composer-title">3. Optional Camera Demo</p>
+                            <p class="composer-subtitle">Shows face tracking and intended pan/tilt movement.</p>
+                        </div>
+                        <button class="cam-btn" id="btn-start-camera">
+                            <span>📷</span> Start Camera
+                        </button>
+                    </div>
+                    <div class="camera-container">
+                        <video id="camera-feed" autoplay playsinline muted></video>
+                        <canvas id="camera-overlay"></canvas>
+                        <div class="camera-info">
+                            <div class="tracking-status" id="tracking-status">
+                                <span class="tracking-dot"></span>
+                                <span>No face detected</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="camera-controls">
+                        <div class="cam-settings">
+                            <label class="cam-setting">
+                                <span>Tracking Speed</span>
+                                <input type="range" id="tracking-speed" min="1" max="10" value="5">
+                            </label>
+                            <label class="cam-setting">
+                                <span>Pan Range</span>
+                                <input type="range" id="pan-range" min="20" max="70" value="50">
+                            </label>
+                            <label class="cam-setting">
+                                <span>Tilt Range</span>
+                                <input type="range" id="tilt-range" min="15" max="60" value="40">
+                            </label>
+                        </div>
+                    </div>
+                    <div class="camera-note">
+                        <p>The dot marks the estimated face center. The dashed box shows the tracked region. If the robot is not connected, the gauges below still show the intended movement target.</p>
+                    </div>
+                    <div class="servo-display">
+                        <div class="servo-gauge">
+                            <span class="servo-label">Pan (L/R)</span>
+                            <div class="gauge-bar">
+                                <div class="gauge-fill" id="gauge-pan"></div>
+                                <div class="gauge-marker" id="gauge-pan-marker"></div>
+                            </div>
+                            <span class="servo-value" id="servo-pan-value">0°</span>
+                        </div>
+                        <div class="servo-gauge">
+                            <span class="servo-label">Tilt (U/D)</span>
+                            <div class="gauge-bar">
+                                <div class="gauge-fill" id="gauge-tilt"></div>
+                                <div class="gauge-marker" id="gauge-tilt-marker"></div>
+                            </div>
+                            <span class="servo-value" id="servo-tilt-value">0°</span>
+                        </div>
+                    </div>
+                </section>
+
+                <aside class="command-log workspace-card">
+                    <div class="log-header">
+                        <div>
+                            <h3>Learning Trace</h3>
+                            <p class="log-subtitle">Prompt, plan, and execution notes</p>
+                        </div>
+                        <button class="log-clear" id="btn-clear-log">Clear</button>
+                    </div>
+                    <div class="log-entries" id="log-entries">
+                        <div class="log-entry log-system">
+                            <span class="log-time">--:--</span>
+                            <span class="log-msg">System initialized. Waiting for connection...</span>
+                        </div>
+                    </div>
+                </aside>
+            </aside>
+        </section>
     </main>
 
     <script src="app.js"></script>

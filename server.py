@@ -39,6 +39,7 @@ SERIAL_TIMEOUT = 2      # seconds — read timeout on the serial port
 ACK_TIMEOUT = 3         # seconds — max wait for robot acknowledgment
 CMD_SPACING = 0.3       # seconds — minimum gap between serial writes
 MAX_PLAN_COMMANDS = 4
+MAX_PLAN_STEPS = 3
 INTERACTION_LOG_PATH = os.getenv("INTERACTION_LOG_PATH", "interaction_logs.jsonl")
 
 JOINT_LIMITS = {
@@ -89,6 +90,13 @@ SKILL_LIBRARY = {
         "emotion": "happy",
         "explanation": "I'll wave hello.",
         "keywords": ["wave", "hello", "hi", "greet", "say hi"],
+    },
+    "meme_67": {
+        "commands": ["kbalance", "khi", "krt", "kjy"],
+        "delay": 1,
+        "emotion": "playful",
+        "explanation": "I'll do the 67 routine.",
+        "keywords": ["67", "6-7", "six seven", "doot doot", "67 meme"],
     },
     "celebrate": {
         "commands": ["kjy"],
@@ -429,19 +437,20 @@ SKILL_SUMMARY = "\n".join(
 
 SYSTEM_PROMPT = f"""You interpret natural-language requests for a Petoi Bittle X robot dog.
 
-Your job is to choose the best high-level skill identifier from the allowed list.
+Your job is to choose up to {MAX_PLAN_STEPS} high-level skill identifiers from the allowed list.
 
 Allowed skills:
 {SKILL_SUMMARY}
 
 Rules:
-1. Return exactly one skill_id from the allowed list.
+1. Return between 1 and {MAX_PLAN_STEPS} skill_ids from the allowed list.
 2. Prefer safe, classroom-friendly actions.
-3. If the request is ambiguous, choose the closest safe skill.
-4. Never invent raw serial commands.
+3. If the request sounds multi-step, break it into a short ordered sequence.
+4. If the request is ambiguous, choose the closest safe plan.
+5. Never invent raw serial commands.
 
 Return strict JSON only:
-{{"skill_id":"wave","confidence":0.91,"rationale":"The student asked the dog to say hello."}}
+{{"steps":["walk_forward","wave"],"confidence":0.91,"rationale":"The student asked the dog to move and then greet."}}
 """
 
 
@@ -482,10 +491,51 @@ def keyword_match_skill(user_text):
     }
 
 
+def infer_steps_from_text(user_text):
+    """Broader local chain guessing for up to three steps."""
+    normalized = (user_text or "").lower().strip()
+    split_parts = [
+        p.strip(" ,.!?")
+        for p in re.split(r"\b(?:and then|then|and|after that|afterwards|after|next)\b|[,;]+", normalized)
+        if p and p.strip(" ,.!?")
+    ]
+
+    candidates = split_parts[:MAX_PLAN_STEPS] if len(split_parts) > 1 else [normalized]
+    steps = []
+    rationales = []
+
+    for part in candidates:
+        matched = keyword_match_skill(part)
+        skill_id = matched["skill_id"]
+        if skill_id not in steps:
+            steps.append(skill_id)
+            rationales.append(f"'{part}' -> {skill_id}")
+        if len(steps) >= MAX_PLAN_STEPS:
+            break
+
+    if len(steps) == 1:
+        # Broader guessing: accumulate distinct action cues from the whole sentence.
+        for skill_id, spec in SKILL_LIBRARY.items():
+            if skill_id in steps:
+                continue
+            if any(keyword in normalized for keyword in spec["keywords"]):
+                steps.append(skill_id)
+                rationales.append(f"whole prompt -> {skill_id}")
+            if len(steps) >= MAX_PLAN_STEPS:
+                break
+
+    return {
+        "steps": steps[:MAX_PLAN_STEPS] or ["check_around"],
+        "confidence": 0.6 if len(steps) > 1 else 0.55,
+        "rationale": "Built a short plan from the prompt using constrained skill matching: " + "; ".join(rationales[:MAX_PLAN_STEPS]),
+        "source": "rule",
+    }
+
+
 def call_llm(user_text):
-    """Interpret user's request as a skill identifier."""
+    """Interpret user's request as a short plan of skill identifiers."""
     if not API_KEY:
-        return keyword_match_skill(user_text)
+        return infer_steps_from_text(user_text)
 
     try:
         print(f"[LLM] Calling {MODEL}...")
@@ -522,62 +572,105 @@ def call_llm(user_text):
         content = content.strip()
 
         result = json.loads(content)
-        skill_id = str(result.get("skill_id", "")).strip()
-        if skill_id not in ALLOWED_SKILL_IDS:
-            fallback = keyword_match_skill(user_text)
+        steps = result.get("steps")
+        if isinstance(steps, str):
+            steps = [steps]
+        if not isinstance(steps, list):
+            skill_id = str(result.get("skill_id", "")).strip()
+            steps = [skill_id] if skill_id else []
+
+        cleaned_steps = []
+        for step in steps:
+            step_id = str(step).strip()
+            if step_id in ALLOWED_SKILL_IDS and step_id not in cleaned_steps:
+                cleaned_steps.append(step_id)
+            if len(cleaned_steps) >= MAX_PLAN_STEPS:
+                break
+
+        if not cleaned_steps:
+            fallback = infer_steps_from_text(user_text)
             fallback["rationale"] = (
-                f"Model returned unsupported skill '{skill_id or 'unknown'}'; "
+                "Model returned unsupported or empty steps; "
                 "used constrained fallback planner."
             )
             return fallback
 
         interpreted = {
-            "skill_id": skill_id,
+            "steps": cleaned_steps,
             "confidence": float(result.get("confidence", 0.75)),
-            "rationale": result.get("rationale", "Mapped request to the closest supported classroom skill."),
+            "rationale": result.get("rationale", "Mapped request to the closest supported classroom plan."),
             "source": "llm",
         }
-        print(f"[LLM] Parsed: skill={interpreted['skill_id']} confidence={interpreted['confidence']}")
+        print(f"[LLM] Parsed: steps={interpreted['steps']} confidence={interpreted['confidence']}")
         return interpreted
 
     except json.JSONDecodeError as e:
         print(f"[LLM] JSON parse error: {e}")
         print(f"[LLM] Content was: {content}")
-        fallback = keyword_match_skill(user_text)
+        fallback = infer_steps_from_text(user_text)
         fallback["rationale"] = "Model returned invalid JSON; used constrained fallback planner."
         return fallback
     except Exception as e:
         print(f"[LLM] Error: {e}")
-        fallback = keyword_match_skill(user_text)
+        fallback = infer_steps_from_text(user_text)
         fallback["rationale"] = f"Model request failed ({str(e)}); used constrained fallback planner."
         return fallback
 
 
 def plan_actions(user_text, interpretation):
-    """Convert a high-level skill selection into a concrete command plan."""
-    skill_id = interpretation.get("skill_id") or "check_around"
-    if skill_id not in SKILL_LIBRARY:
-        interpretation = keyword_match_skill(user_text)
-        skill_id = interpretation["skill_id"]
+    """Convert a high-level skill sequence into a concrete command plan."""
+    step_ids = interpretation.get("steps")
+    if not isinstance(step_ids, list) or not step_ids:
+        fallback = infer_steps_from_text(user_text)
+        step_ids = fallback["steps"]
+        interpretation = fallback
 
-    skill = SKILL_LIBRARY[skill_id]
-    commands = list(skill["commands"])[:MAX_PLAN_COMMANDS]
-    delay = max(0, min(int(skill.get("delay", 0)), 5))
+    step_ids = [step for step in step_ids if step in SKILL_LIBRARY][:MAX_PLAN_STEPS]
+    if not step_ids:
+        step_ids = ["check_around"]
+
+    commands = []
+    step_summaries = []
+    emotion = "curious"
+    explanation_parts = []
+    delay_values = []
+
+    for step_id in step_ids:
+        skill = SKILL_LIBRARY[step_id]
+        skill_commands = list(skill["commands"])
+        for cmd in skill_commands:
+            if len(commands) < MAX_PLAN_COMMANDS:
+                commands.append(cmd)
+        step_summaries.append({
+            "skill_id": step_id,
+            "commands": skill_commands,
+            "explanation": skill.get("explanation", ""),
+        })
+        explanation_parts.append(step_id.replace("_", " "))
+        delay_values.append(int(skill.get("delay", 0)))
+        emotion = skill.get("emotion", emotion)
+
+    delay = max([0] + delay_values)
+    explanation = "I'll " + ", then ".join(explanation_parts) + "."
 
     return {
-        "skill_id": skill_id,
+        "skill_id": step_ids[0],
+        "steps": step_ids,
         "commands": commands,
         "delay": delay,
-        "emotion": skill.get("emotion", "curious"),
-        "explanation": skill.get("explanation", "I'll do that now."),
+        "emotion": emotion,
+        "explanation": explanation,
         "trace": {
             "prompt": user_text,
             "planner_source": interpretation.get("source", "rule"),
-            "skill_id": skill_id,
+            "skill_id": step_ids[0],
+            "steps": step_ids,
             "confidence": round(float(interpretation.get("confidence", 0.0)), 2),
             "rationale": interpretation.get("rationale", ""),
+            "step_count": len(step_ids),
             "command_count": len(commands),
         },
+        "step_summaries": step_summaries,
     }
 
 
@@ -782,6 +875,7 @@ def handle_command():
         "interpretation": interpretation,
         "plan": {
             "skill_id": plan.get("skill_id"),
+            "steps": plan.get("steps", []),
             "commands": commands,
             "delay": delay,
             "emotion": emotion,

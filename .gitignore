@@ -7,3 +7,5 @@ test_port.py
 .venv/
 venv/
 .DS_Store
+paper/
+interaction_logs.jsonl

@@ -7,7 +7,6 @@ const API_BASE = 'http://localhost:8080/api';
 
 // ─── State ────────────────────────────────────────────────
 const state = {
-    mode: 'voice',
     connected: false,
     listening: false,
     cameraActive: false,
@@ -24,12 +23,6 @@ const state = {
 // ─── DOM Elements ─────────────────────────────────────────
 const $ = id => document.getElementById(id);
 const els = {
-    btnVoice: $('btn-voice-mode'),
-    btnCamera: $('btn-camera-mode'),
-    btnManual: $('btn-manual-mode'),
-    panelVoice: $('panel-voice'),
-    panelCamera: $('panel-camera'),
-    panelManual: $('panel-manual'),
     micContainer: $('mic-container'),
     btnMic: $('btn-mic'),
     micStatus: $('mic-status'),
@@ -73,23 +66,6 @@ function addLog(msg, type = 'system') {
     }
 }
 
-// ─── Mode Switching ───────────────────────────────────────
-function switchMode(mode) {
-    state.mode = mode;
-    document.querySelectorAll('.mode-btn').forEach(btn => {
-        btn.classList.toggle('active', btn.dataset.mode === mode);
-    });
-    document.querySelectorAll('.mode-panel').forEach(panel => {
-        panel.classList.toggle('active', panel.id === `panel-${mode}`);
-    });
-    if (mode !== 'camera' && state.cameraActive) stopCamera();
-    addLog(`Switched to ${mode} mode`, 'system');
-}
-
-els.btnVoice.addEventListener('click', () => switchMode('voice'));
-els.btnCamera.addEventListener('click', () => switchMode('camera'));
-els.btnManual.addEventListener('click', () => switchMode('manual'));
-
 // ─── Status Check ─────────────────────────────────────────
 async function checkStatus() {
     try {
@@ -124,21 +100,47 @@ const EMOJIS = {
     playful: '🐩', sleepy: '😴', confused: '🤔'
 };
 
+function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, (char) => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;',
+    }[char]));
+}
+
+function setTranscriptState(text = '', status = '', tone = '') {
+    const safeText = escapeHtml(text);
+    const safeStatus = escapeHtml(status);
+    const statusMarkup = safeStatus
+        ? `<span class="transcript-status ${tone}">${safeStatus}</span>`
+        : '';
+
+    els.liveTranscript.innerHTML = safeText
+        ? `<span class="transcript-text">${safeText}</span>${statusMarkup}`
+        : '';
+    els.liveTranscript.classList.toggle('has-content', Boolean(safeText));
+}
+
 function renderTrace(trace) {
     if (!trace || !trace.skill_id) return '';
 
     const confidence = typeof trace.confidence === 'number'
         ? `${Math.round(trace.confidence * 100)}%`
         : 'n/a';
+    const plan = Array.isArray(trace.steps) && trace.steps.length > 0
+        ? trace.steps.join(' -> ')
+        : trace.skill_id;
 
     return `
         <div class="cmd-tags" style="margin-top:10px">
-            <span class="cmd-tag">intent: ${trace.skill_id}</span>
-            <span class="cmd-tag">source: ${trace.planner_source || 'rule'}</span>
-            <span class="cmd-tag">confidence: ${confidence}</span>
+            <span class="cmd-tag">Plan: ${plan}</span>
+            <span class="cmd-tag">Planner: ${trace.planner_source || 'rule'}</span>
+            <span class="cmd-tag">Confidence: ${confidence}</span>
         </div>
         <p style="font-size:11px;color:var(--text-muted);margin-top:6px">
-            ${trace.rationale || 'Used the constrained planner.'}
+            ${trace.rationale || 'The system matched the prompt to available safe skills.'}
         </p>
     `;
 }
@@ -148,7 +150,7 @@ function renderSentiment(sentiment) {
 
     return `
         <p style="font-size:11px;color:var(--text-muted);margin-top:6px">
-            affect: ${sentiment.affect} | sentiment: ${sentiment.label} (${sentiment.score})
+            Support cue: ${sentiment.label} (${sentiment.score})
         </p>
     `;
 }
@@ -212,12 +214,8 @@ function initVoiceRecognition() {
 
 async function processVoiceCommand(text) {
     state.processing = true;
-    els.liveTranscript.textContent = `"${text}"`;
-    els.liveTranscript.style.opacity = '1';
+    setTranscriptState(`"${text}"`, 'Thinking...', 'pending');
     addLog(`🎤 "${text}"`, 'voice');
-
-    // Show loading
-    els.responseBubble.innerHTML = '<p><span class="loading"></span> Thinking...</p>';
 
     try {
         const res = await fetch(`${API_BASE}/command`, {
@@ -243,6 +241,7 @@ async function processVoiceCommand(text) {
         html += renderSentiment(data.sentiment);
         html += renderTrace(data.trace);
         els.responseBubble.innerHTML = html;
+        setTranscriptState(`"${text}"`, 'Done', 'done');
 
         // Log everything
         data.commands?.forEach(cmd => addLog(`➤ ${cmd}`, 'cmd'));
@@ -251,7 +250,10 @@ async function processVoiceCommand(text) {
             addLog(`💬 sentiment=${data.sentiment.label} affect=${data.sentiment.affect} score=${data.sentiment.score}`, 'system');
         }
         if (data.trace?.skill_id) {
-            addLog(`🧠 intent=${data.trace.skill_id} via ${data.trace.planner_source || 'rule'} (${Math.round((data.trace.confidence || 0) * 100)}%)`, 'system');
+            const planLabel = Array.isArray(data.trace.steps) && data.trace.steps.length > 0
+                ? data.trace.steps.join(' -> ')
+                : data.trace.skill_id;
+            addLog(`🧠 plan=${planLabel} via ${data.trace.planner_source || 'rule'} (${Math.round((data.trace.confidence || 0) * 100)}%)`, 'system');
         }
 
         data.serial_responses?.forEach(sr => {
@@ -265,6 +267,7 @@ async function processVoiceCommand(text) {
         });
     } catch (e) {
         els.responseBubble.innerHTML = `<p style="color:var(--red)">Error: ${e.message}</p>`;
+        setTranscriptState(`"${text}"`, 'Error', 'error');
         addLog(`Error: ${e.message}`, 'error');
     }
 
@@ -423,7 +426,7 @@ function runTrackingLoop(canvas) {
 
             // Status
             els.trackingStatus.className = 'tracking-status active';
-            els.trackingStatus.querySelector('span:last-child').textContent = 'Face tracked ✓';
+            els.trackingStatus.querySelector('span:last-child').textContent = 'Face tracked';
 
             // Map to servo angles (mirror X for natural movement)
             const panMax = parseInt(els.panRange.value);
@@ -507,6 +510,7 @@ async function sendManualCommand(cmd) {
         const isSerial = /^[a-zA-Z]\d/.test(cmd) || /^k[a-z]/.test(cmd) || cmd === 'd' || cmd === 'j' || cmd === 'G' || cmd === 'p';
 
         if (isSerial) {
+            setTranscriptState(`"${cmd}"`, 'Sent directly', 'done');
             const res = await fetch(`${API_BASE}/direct`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -515,6 +519,7 @@ async function sendManualCommand(cmd) {
             const data = await res.json();
             addLog(data.success ? `✅ ${data.response?.substring(0, 80) || 'ok'}` : `❌ ${data.error}`, data.success ? 'system' : 'error');
         } else {
+            setTranscriptState(`"${cmd}"`, 'Thinking...', 'pending');
             // Route through LLM
             const res = await fetch(`${API_BASE}/command`, {
                 method: 'POST',
@@ -522,16 +527,34 @@ async function sendManualCommand(cmd) {
                 body: JSON.stringify({ text: cmd })
             });
             const data = await res.json();
+            let html = `<p>${data.explanation}</p>`;
+            if (data.commands?.length > 0) {
+                html += '<div class="cmd-tags">';
+                data.commands.forEach(command => { html += `<span class="cmd-tag">${command}</span>`; });
+                html += '</div>';
+                if (data.delay > 0 && data.commands.length > 1) {
+                    html += `<p style="font-size:11px;color:var(--text-muted);margin-top:6px">⏱ ${data.delay}s delay between actions</p>`;
+                }
+            }
+            html += renderSentiment(data.sentiment);
+            html += renderTrace(data.trace);
+            els.responseBubble.innerHTML = html;
+            setTranscriptState(`"${cmd}"`, 'Done', 'done');
             data.commands?.forEach(c => addLog(`➤ ${c}`, 'cmd'));
             if (data.explanation) addLog(`🐾 ${data.explanation}`, 'robot');
             if (data.sentiment?.label) {
                 addLog(`💬 sentiment=${data.sentiment.label} affect=${data.sentiment.affect}`, 'system');
             }
             if (data.trace?.skill_id) {
-                addLog(`🧠 intent=${data.trace.skill_id} via ${data.trace.planner_source || 'rule'}`, 'system');
+                const planLabel = Array.isArray(data.trace.steps) && data.trace.steps.length > 0
+                    ? data.trace.steps.join(' -> ')
+                    : data.trace.skill_id;
+                addLog(`🧠 plan=${planLabel} via ${data.trace.planner_source || 'rule'}`, 'system');
             }
         }
     } catch (e) {
+        setTranscriptState(`"${cmd}"`, 'Error', 'error');
+        els.responseBubble.innerHTML = `<p style="color:var(--red)">Error: ${e.message}</p>`;
         addLog(`Error: ${e.message}`, 'error');
     }
 }
@@ -563,11 +586,12 @@ els.btnClearLog.addEventListener('click', () => {
 // ═══════════════════════════════════════════════════════════
 
 async function init() {
-    addLog('🐾 Bittle X AI Controller v1.0', 'system');
+    addLog('🐾 Bittle X learning interface ready', 'system');
     await checkStatus();
     setInterval(checkStatus, 5000);
     initVoiceRecognition();
-    addLog('Ready! Click the mic or switch to Camera/Manual mode.', 'system');
+    setTranscriptState('Ready for a voice or text command.', 'Ready', 'done');
+    addLog('Use the mic, type a command, or start the camera demo.', 'system');
 }
 
 window.addEventListener('DOMContentLoaded', init);
