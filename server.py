@@ -38,9 +38,13 @@ LOCK_TIMEOUT = 5        # seconds — never wait longer than this for the lock
 SERIAL_TIMEOUT = 2      # seconds — read timeout on the serial port
 ACK_TIMEOUT = 3         # seconds — max wait for robot acknowledgment
 CMD_SPACING = 0.3       # seconds — minimum gap between serial writes
-MAX_PLAN_COMMANDS = 4
+MAX_PLAN_COMMANDS = 8
 MAX_PLAN_STEPS = 3
 INTERACTION_LOG_PATH = os.getenv("INTERACTION_LOG_PATH", "interaction_logs.jsonl")
+# Bind to localhost by default so a shared classroom Wi-Fi network can't reach
+# the robot-control endpoints. Override with FLASK_HOST=0.0.0.0 only if you
+# deliberately need to drive the robot from another device.
+HOST = os.getenv("FLASK_HOST", "127.0.0.1")
 
 JOINT_LIMITS = {
     0: (-70, 70),
@@ -634,13 +638,18 @@ def plan_actions(user_text, interpretation):
     emotion = "curious"
     explanation_parts = []
     delay_values = []
+    included_steps = []
 
     for step_id in step_ids:
         skill = SKILL_LIBRARY[step_id]
         skill_commands = list(skill["commands"])
-        for cmd in skill_commands:
-            if len(commands) < MAX_PLAN_COMMANDS:
-                commands.append(cmd)
+        # Only add a skill if its whole command sequence fits in the budget.
+        # Never split a skill across the cap -- that would make the spoken
+        # explanation promise an action that never actually gets sent.
+        if commands and len(commands) + len(skill_commands) > MAX_PLAN_COMMANDS:
+            break
+        commands.extend(skill_commands[:MAX_PLAN_COMMANDS])
+        included_steps.append(step_id)
         step_summaries.append({
             "skill_id": step_id,
             "commands": skill_commands,
@@ -650,6 +659,9 @@ def plan_actions(user_text, interpretation):
         delay_values.append(int(skill.get("delay", 0)))
         emotion = skill.get("emotion", emotion)
 
+    # Keep the returned plan, trace, and explanation consistent with what will
+    # actually run on the robot.
+    step_ids = included_steps or step_ids[:1]
     delay = max([0] + delay_values)
     explanation = "I'll " + ", then ".join(explanation_parts) + "."
 
@@ -675,7 +687,15 @@ def plan_actions(user_text, interpretation):
 
 
 def validate_command(cmd):
-    """Validate direct serial commands against an allowlist and joint limits."""
+    """Validate direct serial commands against an allowlist and joint limits.
+
+    Parameterized joint commands use the Petoi serial form where the token
+    letter is immediately followed by the first joint index, e.g. "m0 30" or
+    "i0 30 1 -10". This is exactly what the camera tracker and the manual
+    joint controls send, so the validator must accept it (the older
+    space-separated form "m 0 30" is tolerated too). Joint-range limits are
+    enforced here before anything reaches the robot.
+    """
     cmd = (cmd or "").strip()
     if not cmd:
         return False, "Empty command"
@@ -683,13 +703,15 @@ def validate_command(cmd):
     if cmd in ALLOWED_DIRECT_COMMANDS:
         return True, None
 
-    if cmd.startswith("m "):
-        parts = cmd.split()
-        if len(parts) != 3:
-            return False, "Single-joint command must be: m <joint> <angle>"
+    token = cmd[0]
+
+    if token == "m":
+        parts = cmd[1:].split()
+        if len(parts) != 2:
+            return False, "Single-joint command must be: m<joint> <angle>"
         try:
-            joint = int(parts[1])
-            angle = int(parts[2])
+            joint = int(parts[0])
+            angle = int(parts[1])
         except ValueError:
             return False, "Single-joint command arguments must be integers"
         if joint not in JOINT_LIMITS:
@@ -699,12 +721,12 @@ def validate_command(cmd):
             return False, f"Joint {joint} angle must be between {low} and {high}"
         return True, None
 
-    if cmd.startswith("i "):
-        parts = cmd.split()
-        if len(parts) < 3 or len(parts[1:]) % 2 != 0:
+    if token == "i":
+        parts = cmd[1:].split()
+        if len(parts) < 2 or len(parts) % 2 != 0:
             return False, "Multi-joint command must contain joint/angle pairs"
         try:
-            values = [int(p) for p in parts[1:]]
+            values = [int(p) for p in parts]
         except ValueError:
             return False, "Multi-joint command arguments must be integers"
         for idx in range(0, len(values), 2):
@@ -730,6 +752,13 @@ def append_interaction_log(record):
             fh.write(json.dumps(payload, ensure_ascii=True) + "\n")
 
 
+def _phrase_present(phrase, text):
+    """Word-boundary match so short cues like 'no' don't fire inside
+    'now'/'know', and 'why' only matches the standalone word. Handles
+    multi-word and apostrophe phrases (e.g. \"doesn't work\")."""
+    return re.search(r"(?<!\w)" + re.escape(phrase) + r"(?!\w)", text) is not None
+
+
 def analyze_sentiment(user_text):
     """Lightweight lexicon-based sentiment for classroom interaction analysis."""
     normalized = (user_text or "").lower().strip()
@@ -739,12 +768,12 @@ def analyze_sentiment(user_text):
     matches = []
 
     for phrase, weight in POSITIVE_SENTIMENT_TERMS.items():
-        if phrase in normalized:
+        if _phrase_present(phrase, normalized):
             score += weight
             matches.append(phrase)
 
     for phrase, weight in NEGATIVE_SENTIMENT_TERMS.items():
-        if phrase in normalized:
+        if _phrase_present(phrase, normalized):
             score += weight
             matches.append(phrase)
 
@@ -754,7 +783,7 @@ def analyze_sentiment(user_text):
     if user_text.isupper() and user_text.strip():
         score -= 0.4
 
-    uncertainty = any(phrase in normalized for phrase in UNCERTAINTY_TERMS)
+    uncertainty = any(_phrase_present(phrase, normalized) for phrase in UNCERTAINTY_TERMS)
     if uncertainty and score > -0.5:
         score -= 0.2
 
@@ -965,4 +994,4 @@ if __name__ == '__main__':
     print(f"\n  🌐 Open http://localhost:8080 in your browser")
     print("=" * 60)
 
-    app.run(host='0.0.0.0', port=8080, debug=False, threaded=True)
+    app.run(host=HOST, port=8080, debug=False, threaded=True)
