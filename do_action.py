@@ -1,9 +1,40 @@
-"""Send a wave hello command to Bittle X on COM5."""
-import serial
+"""Send a wave hello command to Bittle X.
+
+Reads the serial port from COM_PORT (in your environment or .env) so it works
+on macOS/Linux (e.g. /dev/cu.usbserial-*) as well as Windows (COMx). If
+COM_PORT isn't set, it tries to auto-detect a likely USB serial device.
+"""
+import os
 import time
 
-PORT = "COM5"
-BAUD = 115200
+import serial
+import serial.tools.list_ports
+from dotenv import load_dotenv
+
+load_dotenv()
+
+BAUD = int(os.getenv("BAUD_RATE", "115200"))
+
+
+def pick_port():
+    """Use COM_PORT if set, otherwise guess a likely USB serial device."""
+    env_port = os.getenv("COM_PORT")
+    if env_port:
+        return env_port
+    for p in serial.tools.list_ports.comports():
+        dev = p.device
+        if any(tag in dev for tag in (
+            "cu.usbserial", "cu.usbmodem", "cu.SLAB", "cu.wchusbserial",
+            "ttyUSB", "ttyACM", "COM",
+        )):
+            return dev
+    raise SystemExit(
+        "No serial port found. Set COM_PORT in .env "
+        "(e.g. COM_PORT=/dev/cu.usbserial-10 on macOS)."
+    )
+
+
+PORT = pick_port()
 
 print(f"[1/4] Opening {PORT}...")
 ser = serial.Serial(PORT, BAUD, timeout=2)

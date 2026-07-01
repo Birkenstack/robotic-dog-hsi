@@ -144,14 +144,20 @@ You can also type natural language in the manual box. If the input does not look
 
 ## Safety Behavior
 
-The server blocks dangerous low-level commands associated with calibration or firmware writes:
+The server uses an allowlist, not a blocklist. Only a fixed set of
+classroom-safe commands can ever reach the robot:
 
-- `c`
-- `s`
-- `K`
-- `a`
+- the named skills in the skill library (stand, sit, walk, wave, etc.)
+- a small set of safe direct tokens (for example `d`, `j`)
+- parameterized joint moves (`m<joint> <angle>` and `i<joint> <angle> ...`),
+  which are additionally clamped to per-joint angle limits
 
-There is also an emergency stop button in the UI and an `Esc` keyboard shortcut, both of which send the `d` command.
+Anything outside this set — including calibration or firmware-write commands
+such as `c`, `s`, `K`, or `a` — is rejected before it is sent, and the attempt
+is recorded in the interaction log.
+
+There is also an emergency stop button in the UI and an `Esc` keyboard
+shortcut, both of which send the `d` command.
 
 This project can still move physical hardware. Test carefully, keep clear space around the robot, and do not assume the LLM will always choose ideal actions.
 
