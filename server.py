@@ -96,14 +96,16 @@ SKILL_LIBRARY = {
         "keywords": ["wave", "hello", "hi", "greet", "say hi"],
     },
     "meme_67": {
-        "commands": ["kbalance", "khi", "krt", "kjy"],
+        "commands": ["kbalance", "khi", "krt", "kstr"],
         "delay": 1,
         "emotion": "playful",
         "explanation": "I'll do the 67 routine.",
         "keywords": ["67", "6-7", "six seven", "doot doot", "67 meme"],
     },
     "celebrate": {
-        "commands": ["kjy"],
+        # This firmware does not expose a "jy" skill. Compose the classroom
+        # celebration from movements the connected Bittle X acknowledges.
+        "commands": ["khi", "kstr"],
         "delay": 2,
         "emotion": "happy",
         "explanation": "I'll celebrate with a happy move.",
@@ -197,7 +199,7 @@ SKILL_LIBRARY = {
 
 ALLOWED_SKILL_IDS = set(SKILL_LIBRARY.keys())
 ALLOWED_DIRECT_COMMANDS = {
-    "kbalance", "ksit", "krest", "kstr", "khi", "kjy", "kck", "kwkF", "kbk",
+    "kbalance", "ksit", "krest", "kstr", "khi", "kck", "kwkF", "kbk",
     "kwkL", "kwkR", "kcrF", "ktrF", "kpu1", "kpd", "krt", "d", "j", "p", "G"
 }
 interaction_log_lock = threading.Lock()
@@ -205,7 +207,8 @@ interaction_log_lock = threading.Lock()
 POSITIVE_SENTIMENT_TERMS = {
     "good": 1.0, "great": 1.4, "awesome": 1.6, "cool": 1.0, "fun": 1.2,
     "nice": 0.9, "love": 1.5, "yay": 1.4, "happy": 1.3, "excited": 1.4,
-    "thanks": 0.8, "thank you": 1.0, "amazing": 1.6,
+    "thanks": 0.8, "thank you": 1.0, "amazing": 1.6, "aced": 1.6,
+    "passed": 1.2, "proud": 1.3,
 }
 
 NEGATIVE_SENTIMENT_TERMS = {
@@ -538,6 +541,16 @@ def infer_steps_from_text(user_text):
 
 def call_llm(user_text):
     """Interpret user's request as a short plan of skill identifiers."""
+    normalized = (user_text or "").lower().strip().strip(" .!?")
+    for skill_id, spec in SKILL_LIBRARY.items():
+        if normalized == skill_id.replace("_", " ") or normalized in spec["keywords"]:
+            return {
+                "steps": [skill_id],
+                "confidence": 1.0,
+                "rationale": f"The prompt directly names the supported {skill_id.replace('_', ' ')} skill.",
+                "source": "rule",
+            }
+
     if not API_KEY:
         return infer_steps_from_text(user_text)
 
