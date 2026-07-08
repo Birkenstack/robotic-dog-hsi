@@ -130,29 +130,54 @@ function renderTrace(trace) {
         ? `${Math.round(trace.confidence * 100)}%`
         : 'n/a';
     const plan = Array.isArray(trace.steps) && trace.steps.length > 0
-        ? trace.steps.join(' -> ')
+        ? trace.steps.join(' → ')
         : trace.skill_id;
+    const plannerLabel = trace.planner_source === 'llm' ? 'AI model' : 'keyword rules';
+    const rationale = trace.rationale || 'The system matched the prompt to available safe skills.';
 
     return `
-        <div class="cmd-tags" style="margin-top:10px">
-            <span class="cmd-tag">Plan: ${plan}</span>
-            <span class="cmd-tag">Planner: ${trace.planner_source || 'rule'}</span>
-            <span class="cmd-tag">Confidence: ${confidence}</span>
+        <div class="why-box">
+            <span class="why-label">🧠 Why I chose this</span>
+            <p class="why-text">${escapeHtml(rationale)}</p>
         </div>
-        <p style="font-size:11px;color:var(--text-muted);margin-top:6px">
-            ${trace.rationale || 'The system matched the prompt to available safe skills.'}
+        <div class="cmd-tags" style="margin-top:10px">
+            <span class="cmd-tag">Plan: ${escapeHtml(plan)}</span>
+            <span class="cmd-tag">Decided by: ${plannerLabel}</span>
+            <span class="cmd-tag">How sure? ${confidence}</span>
+        </div>
+    `;
+}
+
+const MOOD_LABELS = {
+    excited: 'excited 😄',
+    frustrated: 'frustrated 😖',
+    uncertain: 'unsure 🤔',
+    calm: 'calm 🙂',
+};
+
+function renderSentiment(sentiment) {
+    if (!sentiment || !sentiment.affect) return '';
+
+    return `
+        <p class="mood-line">
+            Mood detected: ${MOOD_LABELS[sentiment.affect] || escapeHtml(sentiment.affect)}
         </p>
     `;
 }
 
-function renderSentiment(sentiment) {
-    if (!sentiment || !sentiment.label) return '';
-
-    return `
-        <p style="font-size:11px;color:var(--text-muted);margin-top:6px">
-            Support cue: ${sentiment.label} (${sentiment.score})
-        </p>
-    `;
+function renderResponse(data) {
+    let html = `<p>${escapeHtml(data.explanation || '')}</p>`;
+    if (data.commands?.length > 0) {
+        html += '<div class="cmd-tags">';
+        data.commands.forEach(cmd => { html += `<span class="cmd-tag">${escapeHtml(cmd)}</span>`; });
+        html += '</div>';
+        if (data.delay > 0 && data.commands.length > 1) {
+            html += `<p class="response-note">⏱ ${data.delay}s delay between actions</p>`;
+        }
+    }
+    html += renderTrace(data.trace);
+    html += renderSentiment(data.sentiment);
+    els.responseBubble.innerHTML = html;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -228,19 +253,7 @@ async function processVoiceCommand(text) {
 
         // Update UI
         els.robotEmoji.textContent = EMOJIS[data.emotion] || '🐕';
-
-        let html = `<p>${data.explanation}</p>`;
-        if (data.commands?.length > 0) {
-            html += '<div class="cmd-tags">';
-            data.commands.forEach(cmd => { html += `<span class="cmd-tag">${cmd}</span>`; });
-            html += '</div>';
-            if (data.delay > 0 && data.commands.length > 1) {
-                html += `<p style="font-size:11px;color:var(--text-muted);margin-top:6px">⏱ ${data.delay}s delay between actions</p>`;
-            }
-        }
-        html += renderSentiment(data.sentiment);
-        html += renderTrace(data.trace);
-        els.responseBubble.innerHTML = html;
+        renderResponse(data);
         setTranscriptState(`"${text}"`, 'Done', 'done');
 
         // Log everything
@@ -439,8 +452,12 @@ function runTrackingLoop(canvas) {
 
             // Smooth with tracking speed (higher = more responsive)
             const speed = Math.min(parseInt(els.trackingSpeed.value) / 8, 1.0);
-            const pan = Math.round(state.lastPan + (targetPan - state.lastPan) * speed);
-            const tilt = Math.round(state.lastTilt + (targetTilt - state.lastTilt) * speed);
+            // Clamp to the server's joint limits (pan ±70, tilt −30..80) so
+            // tracking commands are never rejected by the validator.
+            const pan = Math.max(-70, Math.min(70,
+                Math.round(state.lastPan + (targetPan - state.lastPan) * speed)));
+            const tilt = Math.max(-30, Math.min(80,
+                Math.round(state.lastTilt + (targetTilt - state.lastTilt) * speed)));
 
             // Always update smoothing state (even if we don't send)
             // This prevents smoothing from fighting stale values
@@ -527,18 +544,7 @@ async function sendManualCommand(cmd) {
                 body: JSON.stringify({ text: cmd })
             });
             const data = await res.json();
-            let html = `<p>${data.explanation}</p>`;
-            if (data.commands?.length > 0) {
-                html += '<div class="cmd-tags">';
-                data.commands.forEach(command => { html += `<span class="cmd-tag">${command}</span>`; });
-                html += '</div>';
-                if (data.delay > 0 && data.commands.length > 1) {
-                    html += `<p style="font-size:11px;color:var(--text-muted);margin-top:6px">⏱ ${data.delay}s delay between actions</p>`;
-                }
-            }
-            html += renderSentiment(data.sentiment);
-            html += renderTrace(data.trace);
-            els.responseBubble.innerHTML = html;
+            renderResponse(data);
             setTranscriptState(`"${cmd}"`, 'Done', 'done');
             data.commands?.forEach(c => addLog(`➤ ${c}`, 'cmd'));
             if (data.explanation) addLog(`🐾 ${data.explanation}`, 'robot');

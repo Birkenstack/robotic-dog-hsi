@@ -450,6 +450,37 @@ body::before {
     color: var(--accent);
 }
 
+.why-box {
+    margin-top: 12px;
+    padding: 10px 14px;
+    background: var(--accent-soft);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--radius-sm);
+}
+
+.why-label {
+    display: block;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 4px;
+}
+
+.why-text {
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--text-primary);
+}
+
+.response-note,
+.mood-line {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-top: 8px;
+}
+
 /* ─── Camera Mode ─────────────────────────────────────────── */
 .camera-area {
     display: flex;
