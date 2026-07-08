@@ -3,7 +3,9 @@
    Voice recognition, camera face tracking, and serial bridge
    ═══════════════════════════════════════════════════════════ */
 
-const API_BASE = 'http://localhost:8080/api';
+const API_BASE = window.location.protocol.startsWith('http')
+    ? `${window.location.origin}/api`
+    : 'http://localhost:8080/api';
 
 // ─── State ────────────────────────────────────────────────
 const state = {
@@ -49,6 +51,7 @@ const els = {
     btnEmergency: $('btn-emergency'),
     logEntries: $('log-entries'),
     btnClearLog: $('btn-clear-log'),
+    btnResetDemo: $('btn-reset-demo'),
 };
 
 // ─── Logging ──────────────────────────────────────────────
@@ -56,7 +59,13 @@ function addLog(msg, type = 'system') {
     const time = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
     const entry = document.createElement('div');
     entry.className = `log-entry log-${type}`;
-    entry.innerHTML = `<span class="log-time">${time}</span><span class="log-msg">${msg}</span>`;
+    const timeEl = document.createElement('span');
+    timeEl.className = 'log-time';
+    timeEl.textContent = time;
+    const msgEl = document.createElement('span');
+    msgEl.className = 'log-msg';
+    msgEl.textContent = msg;
+    entry.append(timeEl, msgEl);
     els.logEntries.appendChild(entry);
     els.logEntries.scrollTop = els.logEntries.scrollHeight;
 
@@ -132,15 +141,18 @@ function renderTrace(trace) {
     const plan = Array.isArray(trace.steps) && trace.steps.length > 0
         ? trace.steps.join(' -> ')
         : trace.skill_id;
+    const safePlan = escapeHtml(plan);
+    const safePlanner = escapeHtml(trace.planner_source || 'rule');
+    const safeRationale = escapeHtml(trace.rationale || 'The system matched the prompt to available safe skills.');
 
     return `
         <div class="cmd-tags" style="margin-top:10px">
-            <span class="cmd-tag">Plan: ${plan}</span>
-            <span class="cmd-tag">Planner: ${trace.planner_source || 'rule'}</span>
+            <span class="cmd-tag">Plan: ${safePlan}</span>
+            <span class="cmd-tag">Planner: ${safePlanner}</span>
             <span class="cmd-tag">Confidence: ${confidence}</span>
         </div>
         <p style="font-size:11px;color:var(--text-muted);margin-top:6px">
-            ${trace.rationale || 'The system matched the prompt to available safe skills.'}
+            ${safeRationale}
         </p>
     `;
 }
@@ -150,9 +162,107 @@ function renderSentiment(sentiment) {
 
     return `
         <p style="font-size:11px;color:var(--text-muted);margin-top:6px">
-            Support cue: ${sentiment.label} (${sentiment.score})
+            Support cue: ${escapeHtml(sentiment.label)} (${escapeHtml(sentiment.score)})
         </p>
     `;
+}
+
+function renderCommandTags(commands = []) {
+    if (!commands.length) return '';
+    const tags = commands
+        .map(command => `<span class="cmd-tag">${escapeHtml(command)}</span>`)
+        .join('');
+    return `<div class="cmd-tags">${tags}</div>`;
+}
+
+function renderReasoning(reasoning) {
+    if (!reasoning) return '';
+
+    const candidates = Array.isArray(reasoning.candidates) ? reasoning.candidates : [];
+    const fitOrder = { strong: 'Strong', medium: 'Medium', weak: 'Weak' };
+    const candidateMarkup = candidates.map(candidate => `
+        <div class="reasoning-candidate ${candidate.selected ? 'selected' : ''}">
+            <div>
+                <div class="reasoning-candidate-top">
+                    <strong>${escapeHtml(candidate.label || candidate.skill_id || 'skill')}</strong>
+                    <span class="fit-pill fit-${escapeHtml(candidate.fit || 'weak')}">${escapeHtml(fitOrder[candidate.fit] || candidate.fit || 'Weak')} fit</span>
+                </div>
+                ${Array.isArray(candidate.matched_cues) && candidate.matched_cues.length
+                    ? `<p class="reasoning-cues">Cues: ${candidate.matched_cues.map(escapeHtml).join(', ')}</p>`
+                    : '<p class="reasoning-cues">Cues: none matched directly</p>'}
+                <p>${escapeHtml(candidate.reason || '')}</p>
+                <p class="reasoning-command">${escapeHtml(candidate.command_text || (candidate.commands || []).join(' → ') || 'No command')}</p>
+            </div>
+            <span>${candidate.selected ? 'Chosen' : 'Considered'}</span>
+        </div>
+    `).join('');
+
+    const commands = Array.isArray(reasoning.commands) && reasoning.commands.length > 0
+        ? reasoning.commands.join(' → ')
+        : 'No robot command sent';
+
+    return `
+        <div class="reasoning-card">
+            <div class="reasoning-row">
+                <span>What I understood</span>
+                <p>${escapeHtml(reasoning.intent || 'The prompt needs a clearer supported action.')}</p>
+            </div>
+            <div class="reasoning-row">
+                <span>Actions considered</span>
+                <div class="reasoning-candidates">${candidateMarkup}</div>
+            </div>
+            <div class="reasoning-row">
+                <span>Safe command check</span>
+                <p>${escapeHtml(reasoning.validation?.message || 'Commands were checked before execution.')}</p>
+                <p class="reasoning-command">${escapeHtml(commands)}</p>
+            </div>
+            <div class="reasoning-row">
+                <span>Try next</span>
+                <p>${escapeHtml(reasoning.revision_tip || 'Revise the prompt if the robot did not do what you expected.')}</p>
+            </div>
+        </div>
+    `;
+}
+
+function renderCommandResponse(data) {
+    let html = `<p>${escapeHtml(data.explanation || 'No explanation returned.')}</p>`;
+    html += renderCommandTags(data.commands || []);
+    if (Array.isArray(data.command_delays) && data.command_delays.some(delay => delay > 0) && data.commands?.length > 1) {
+        html += '<p style="font-size:11px;color:var(--text-muted);margin-top:6px">⏱ Timed sequence with short pauses between actions</p>';
+    } else if (data.delay > 0 && data.commands?.length > 1) {
+        html += `<p style="font-size:11px;color:var(--text-muted);margin-top:6px">⏱ ${escapeHtml(data.delay)}s delay between actions</p>`;
+    }
+    html += renderSentiment(data.sentiment);
+    html += renderTrace(data.trace);
+    html += renderReasoning(data.reasoning);
+    els.responseBubble.innerHTML = html;
+}
+
+function logCommandResponse(data) {
+    data.commands?.forEach(cmd => addLog(`➤ ${cmd}`, 'cmd'));
+    if (data.explanation) addLog(`🐾 ${data.explanation}`, 'robot');
+    if (data.sentiment?.label) {
+        addLog(`💬 sentiment=${data.sentiment.label} affect=${data.sentiment.affect} score=${data.sentiment.score}`, 'system');
+    }
+    if (data.reasoning?.intent) {
+        addLog(`🧭 understood=${data.reasoning.intent}`, 'system');
+    }
+    if (data.trace?.skill_id || data.trace?.status) {
+        const planLabel = Array.isArray(data.trace.steps) && data.trace.steps.length > 0
+            ? data.trace.steps.join(' -> ')
+            : (data.trace.status || 'needs revision');
+        addLog(`🧠 plan=${planLabel} via ${data.trace.planner_source || 'rule'} (${Math.round((data.trace.confidence || 0) * 100)}%)`, 'system');
+    }
+
+    data.serial_responses?.forEach(sr => {
+        if (sr.blocked) {
+            addLog(`🚫 ${sr.cmd} — ${sr.reason}`, 'error');
+        } else if (sr.success) {
+            addLog(`✅ ${sr.cmd} acknowledged`, 'system');
+        } else {
+            addLog(`❌ ${sr.cmd}: ${sr.error}`, 'error');
+        }
+    });
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -226,47 +336,12 @@ async function processVoiceCommand(text) {
 
         const data = await res.json();
 
-        // Update UI
         els.robotEmoji.textContent = EMOJIS[data.emotion] || '🐕';
-
-        let html = `<p>${data.explanation}</p>`;
-        if (data.commands?.length > 0) {
-            html += '<div class="cmd-tags">';
-            data.commands.forEach(cmd => { html += `<span class="cmd-tag">${cmd}</span>`; });
-            html += '</div>';
-            if (data.delay > 0 && data.commands.length > 1) {
-                html += `<p style="font-size:11px;color:var(--text-muted);margin-top:6px">⏱ ${data.delay}s delay between actions</p>`;
-            }
-        }
-        html += renderSentiment(data.sentiment);
-        html += renderTrace(data.trace);
-        els.responseBubble.innerHTML = html;
+        renderCommandResponse(data);
         setTranscriptState(`"${text}"`, 'Done', 'done');
-
-        // Log everything
-        data.commands?.forEach(cmd => addLog(`➤ ${cmd}`, 'cmd'));
-        if (data.explanation) addLog(`🐾 ${data.explanation}`, 'robot');
-        if (data.sentiment?.label) {
-            addLog(`💬 sentiment=${data.sentiment.label} affect=${data.sentiment.affect} score=${data.sentiment.score}`, 'system');
-        }
-        if (data.trace?.skill_id) {
-            const planLabel = Array.isArray(data.trace.steps) && data.trace.steps.length > 0
-                ? data.trace.steps.join(' -> ')
-                : data.trace.skill_id;
-            addLog(`🧠 plan=${planLabel} via ${data.trace.planner_source || 'rule'} (${Math.round((data.trace.confidence || 0) * 100)}%)`, 'system');
-        }
-
-        data.serial_responses?.forEach(sr => {
-            if (sr.blocked) {
-                addLog(`🚫 ${sr.cmd} — ${sr.reason}`, 'error');
-            } else if (sr.success) {
-                addLog(`✅ ${sr.cmd} acknowledged`, 'system');
-            } else {
-                addLog(`❌ ${sr.cmd}: ${sr.error}`, 'error');
-            }
-        });
+        logCommandResponse(data);
     } catch (e) {
-        els.responseBubble.innerHTML = `<p style="color:var(--red)">Error: ${e.message}</p>`;
+        els.responseBubble.innerHTML = `<p style="color:var(--red)">Error: ${escapeHtml(e.message)}</p>`;
         setTranscriptState(`"${text}"`, 'Error', 'error');
         addLog(`Error: ${e.message}`, 'error');
     }
@@ -503,6 +578,12 @@ els.btnStartCamera.addEventListener('click', startCamera);
 
 async function sendManualCommand(cmd) {
     if (!cmd) return;
+    if (state.processing) {
+        addLog('Command already running. Wait for it to finish before sending another.', 'system');
+        return;
+    }
+
+    state.processing = true;
     addLog(`⌨️ ${cmd}`, 'cmd');
 
     try {
@@ -527,35 +608,17 @@ async function sendManualCommand(cmd) {
                 body: JSON.stringify({ text: cmd })
             });
             const data = await res.json();
-            let html = `<p>${data.explanation}</p>`;
-            if (data.commands?.length > 0) {
-                html += '<div class="cmd-tags">';
-                data.commands.forEach(command => { html += `<span class="cmd-tag">${command}</span>`; });
-                html += '</div>';
-                if (data.delay > 0 && data.commands.length > 1) {
-                    html += `<p style="font-size:11px;color:var(--text-muted);margin-top:6px">⏱ ${data.delay}s delay between actions</p>`;
-                }
-            }
-            html += renderSentiment(data.sentiment);
-            html += renderTrace(data.trace);
-            els.responseBubble.innerHTML = html;
+            els.robotEmoji.textContent = EMOJIS[data.emotion] || '🐕';
+            renderCommandResponse(data);
             setTranscriptState(`"${cmd}"`, 'Done', 'done');
-            data.commands?.forEach(c => addLog(`➤ ${c}`, 'cmd'));
-            if (data.explanation) addLog(`🐾 ${data.explanation}`, 'robot');
-            if (data.sentiment?.label) {
-                addLog(`💬 sentiment=${data.sentiment.label} affect=${data.sentiment.affect}`, 'system');
-            }
-            if (data.trace?.skill_id) {
-                const planLabel = Array.isArray(data.trace.steps) && data.trace.steps.length > 0
-                    ? data.trace.steps.join(' -> ')
-                    : data.trace.skill_id;
-                addLog(`🧠 plan=${planLabel} via ${data.trace.planner_source || 'rule'}`, 'system');
-            }
+            logCommandResponse(data);
         }
     } catch (e) {
         setTranscriptState(`"${cmd}"`, 'Error', 'error');
-        els.responseBubble.innerHTML = `<p style="color:var(--red)">Error: ${e.message}</p>`;
+        els.responseBubble.innerHTML = `<p style="color:var(--red)">Error: ${escapeHtml(e.message)}</p>`;
         addLog(`Error: ${e.message}`, 'error');
+    } finally {
+        state.processing = false;
     }
 }
 
@@ -575,6 +638,25 @@ els.manualInput.addEventListener('keydown', e => {
 document.querySelectorAll('.cmd-btn').forEach(btn => {
     btn.addEventListener('click', () => sendManualCommand(btn.dataset.cmd));
 });
+
+document.querySelectorAll('.demo-prompt-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        const prompt = btn.dataset.demoPrompt;
+        els.manualInput.value = prompt;
+        sendManualCommand(prompt);
+    });
+});
+
+function resetDemoScreen() {
+    els.manualInput.value = '';
+    els.robotEmoji.textContent = '🐕';
+    setTranscriptState('Ready for a voice or text command.', 'Ready', 'done');
+    els.responseBubble.innerHTML = '<p>Ready. The next command will appear here with the selected plan and robot response.</p>';
+    els.logEntries.innerHTML = '';
+    addLog('Demo screen reset', 'system');
+}
+
+els.btnResetDemo.addEventListener('click', resetDemoScreen);
 
 els.btnClearLog.addEventListener('click', () => {
     els.logEntries.innerHTML = '';
