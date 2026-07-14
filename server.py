@@ -471,6 +471,10 @@ Rules:
 3. If the request sounds multi-step, break it into a short ordered sequence.
 4. If the request is ambiguous, choose the closest safe plan.
 5. Never invent raw serial commands.
+6. Write the rationale as one or two plain sentences a middle-school student
+   can read. If the exact request is not a supported skill, name what was
+   asked and say you picked the closest safe alternative. Lower the
+   confidence when you had to substitute or guess.
 
 Return strict JSON only:
 {{"steps":["walk_forward","wave"],"confidence":0.91,"rationale":"The student asked the dog to move and then greet."}}

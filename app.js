@@ -139,30 +139,44 @@ function renderTrace(trace) {
         ? `${Math.round(trace.confidence * 100)}%`
         : 'n/a';
     const plan = Array.isArray(trace.steps) && trace.steps.length > 0
-        ? trace.steps.join(' -> ')
+        ? trace.steps.join(' → ')
         : trace.skill_id;
-    const safePlan = escapeHtml(plan);
-    const safePlanner = escapeHtml(trace.planner_source || 'rule');
-    const safeRationale = escapeHtml(trace.rationale || 'The system matched the prompt to available safe skills.');
+    const plannerLabel = trace.planner_source === 'llm' ? 'AI model' : 'keyword rules';
+    const rationale = trace.rationale || 'The system matched the prompt to available safe skills.';
 
     return `
-        <div class="cmd-tags" style="margin-top:10px">
-            <span class="cmd-tag">Plan: ${safePlan}</span>
-            <span class="cmd-tag">Planner: ${safePlanner}</span>
-            <span class="cmd-tag">Confidence: ${confidence}</span>
+        <div class="why-box">
+            <span class="why-label">🧠 Why I chose this</span>
+            <p class="why-text">${escapeHtml(rationale)}</p>
         </div>
-        <p style="font-size:11px;color:var(--text-muted);margin-top:6px">
-            ${safeRationale}
-        </p>
+        <div class="cmd-tags" style="margin-top:10px">
+            <span class="cmd-tag">Plan: ${escapeHtml(plan)}</span>
+            <span class="cmd-tag">Decided by: ${plannerLabel}</span>
+            <span class="cmd-tag">How sure? ${confidence}</span>
+        </div>
     `;
 }
 
+const MOOD_LABELS = {
+    excited: 'excited 😄',
+    frustrated: 'frustrated 😖',
+    uncertain: 'unsure 🤔',
+    calm: 'calm 🙂',
+};
+
 function renderSentiment(sentiment) {
-    if (!sentiment || !sentiment.label) return '';
+    if (!sentiment || (!sentiment.affect && !sentiment.label)) return '';
+
+    const mood = sentiment.affect
+        ? (MOOD_LABELS[sentiment.affect] || escapeHtml(sentiment.affect))
+        : escapeHtml(sentiment.label);
+    const supportCue = sentiment.label
+        ? ` — Support cue: ${escapeHtml(sentiment.label)}${sentiment.score !== undefined ? ` (${escapeHtml(sentiment.score)})` : ''}`
+        : '';
 
     return `
-        <p style="font-size:11px;color:var(--text-muted);margin-top:6px">
-            Support cue: ${escapeHtml(sentiment.label)} (${escapeHtml(sentiment.score)})
+        <p class="mood-line">
+            Mood detected: ${mood}${supportCue}
         </p>
     `;
 }
@@ -514,8 +528,12 @@ function runTrackingLoop(canvas) {
 
             // Smooth with tracking speed (higher = more responsive)
             const speed = Math.min(parseInt(els.trackingSpeed.value) / 8, 1.0);
-            const pan = Math.round(state.lastPan + (targetPan - state.lastPan) * speed);
-            const tilt = Math.round(state.lastTilt + (targetTilt - state.lastTilt) * speed);
+            // Clamp to the server's joint limits (pan ±70, tilt −30..80) so
+            // tracking commands are never rejected by the validator.
+            const pan = Math.max(-70, Math.min(70,
+                Math.round(state.lastPan + (targetPan - state.lastPan) * speed)));
+            const tilt = Math.max(-30, Math.min(80,
+                Math.round(state.lastTilt + (targetTilt - state.lastTilt) * speed)));
 
             // Always update smoothing state (even if we don't send)
             // This prevents smoothing from fighting stale values
