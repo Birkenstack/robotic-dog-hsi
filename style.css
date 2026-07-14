@@ -450,6 +450,122 @@ body::before {
     color: var(--accent);
 }
 
+.reasoning-card {
+    display: grid;
+    gap: 12px;
+    margin-top: 14px;
+    padding: 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.reasoning-row {
+    display: grid;
+    gap: 6px;
+}
+
+.reasoning-row > span {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+
+.reasoning-row p {
+    margin: 0;
+}
+
+.reasoning-candidates {
+    display: grid;
+    gap: 8px;
+}
+
+.reasoning-candidate {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--bg-glass);
+}
+
+.reasoning-candidate strong {
+    display: block;
+    font-size: 13px;
+    color: var(--text-primary);
+}
+
+.reasoning-candidate-top {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 4px;
+}
+
+.fit-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 7px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    background: rgba(255, 255, 255, 0.55);
+}
+
+.fit-strong {
+    color: var(--green);
+    border-color: rgba(22, 163, 74, 0.22);
+    background: rgba(22, 163, 74, 0.08);
+}
+
+.fit-medium {
+    color: #a16207;
+    border-color: rgba(234, 179, 8, 0.24);
+    background: rgba(234, 179, 8, 0.1);
+}
+
+.fit-weak {
+    color: var(--text-muted);
+}
+
+.reasoning-candidate p {
+    font-size: 12px;
+}
+
+.reasoning-cues {
+    color: var(--text-muted) !important;
+    font-size: 11px !important;
+}
+
+.reasoning-candidate > span {
+    align-self: flex-start;
+    flex-shrink: 0;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-muted);
+}
+
+.reasoning-candidate.selected {
+    border-color: rgba(22, 163, 74, 0.24);
+    background: rgba(34, 197, 94, 0.06);
+}
+
+.reasoning-candidate.selected > span {
+    color: var(--green);
+}
+
+.reasoning-command {
+    font-family: var(--font-mono);
+    color: var(--text-primary) !important;
+}
+
 /* ─── Camera Mode ─────────────────────────────────────────── */
 .camera-area {
     display: flex;
@@ -717,6 +833,72 @@ body::before {
     text-transform: uppercase;
     letter-spacing: 0.05em;
     margin-bottom: 12px;
+}
+
+.demo-prompts {
+    padding-bottom: 18px;
+}
+
+.demo-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+    padding: 0 18px 14px;
+}
+
+.demo-prompt-btn {
+    display: grid;
+    gap: 6px;
+    min-height: 88px;
+    padding: 14px;
+    text-align: left;
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    background: rgba(248, 250, 252, 0.88);
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: all 0.18s ease;
+    font-family: var(--font-body);
+}
+
+.demo-prompt-btn span {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+
+.demo-prompt-btn strong {
+    font-size: 13px;
+    line-height: 1.35;
+    font-weight: 600;
+}
+
+.demo-prompt-btn:hover {
+    border-color: rgba(15, 23, 42, 0.14);
+    background: #ffffff;
+    box-shadow:
+        0 1px 2px rgba(15, 23, 42, 0.04),
+        0 12px 24px rgba(15, 23, 42, 0.06);
+}
+
+.demo-reset-btn {
+    margin-left: 18px;
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.78);
+    color: var(--text-secondary);
+    font-family: var(--font-body);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.demo-reset-btn:hover {
+    color: var(--text-primary);
+    border-color: rgba(15, 23, 42, 0.14);
 }
 
 .cmd-grid {
@@ -1171,6 +1353,10 @@ body::before {
     }
 
     .workspace-steps {
+        grid-template-columns: 1fr;
+    }
+
+    .demo-grid {
         grid-template-columns: 1fr;
     }
 

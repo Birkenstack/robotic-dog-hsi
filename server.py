@@ -45,6 +45,12 @@ INTERACTION_LOG_PATH = os.getenv("INTERACTION_LOG_PATH", "interaction_logs.jsonl
 # the robot-control endpoints. Override with FLASK_HOST=0.0.0.0 only if you
 # deliberately need to drive the robot from another device.
 HOST = os.getenv("FLASK_HOST", "127.0.0.1")
+ALLOWED_ORIGINS = os.getenv(
+    "ALLOWED_ORIGINS",
+    # "null" keeps the local file:// demo workflow working while blocking
+    # ordinary external websites from calling the robot API through CORS.
+    "http://localhost:8080,http://127.0.0.1:8080,null"
+).split(",")
 
 JOINT_LIMITS = {
     0: (-70, 70),
@@ -96,11 +102,18 @@ SKILL_LIBRARY = {
         "keywords": ["wave", "hello", "hi", "greet", "say hi"],
     },
     "meme_67": {
-        "commands": ["kbalance", "khi", "krt", "kstr"],
+        # Built from movements this Bittle X firmware has acknowledged
+        # reliably. It approximates a playful "6-7" up/down gesture without
+        # depending on unsupported custom firmware skills.
+        "commands": ["kbalance", "khi", "ksit", "kbalance", "kstr"],
         "delay": 1,
+        "command_delays": [0.6, 1.6, 0.8, 0.8, 0],
         "emotion": "playful",
-        "explanation": "I'll do the 67 routine.",
-        "keywords": ["67", "6-7", "six seven", "doot doot", "67 meme"],
+        "explanation": "I'll do a playful 6-7 routine.",
+        "keywords": [
+            "67", "6-7", "six seven", "doot doot", "67 meme",
+            "six-seven", "meme", "trend", "trendy"
+        ],
     },
     "celebrate": {
         # This firmware does not expose a "jy" skill. Compose the classroom
@@ -109,7 +122,10 @@ SKILL_LIBRARY = {
         "delay": 2,
         "emotion": "happy",
         "explanation": "I'll celebrate with a happy move.",
-        "keywords": ["celebrate", "joy", "happy dance", "yay", "good job"],
+        "keywords": [
+            "celebrate", "joy", "happy dance", "yay", "good job", "aced",
+            "passed", "proud", "won", "test"
+        ],
     },
     "check_around": {
         "commands": ["kck"],
@@ -464,7 +480,7 @@ Return strict JSON only:
 def keyword_match_skill(user_text):
     """Deterministic fallback planner based on keyword overlap."""
     normalized = user_text.lower().strip()
-    best_skill = "check_around"
+    best_skill = None
     best_score = 0
 
     for skill_id, spec in SKILL_LIBRARY.items():
@@ -492,15 +508,67 @@ def keyword_match_skill(user_text):
 
     return {
         "skill_id": best_skill,
-        "confidence": 0.55 if best_score == 0 else min(0.65 + (best_score * 0.08), 0.98),
-        "rationale": "Matched the request against a constrained local keyword library.",
+        "confidence": 0.45 if best_score == 0 else min(0.65 + (best_score * 0.08), 0.98),
+        "rationale": "Matched the request against a constrained local keyword library." if best_skill else "No supported classroom skill clearly matched the prompt.",
         "source": "rule",
+    }
+
+
+def detect_negated_request(user_text):
+    """Detect simple requests that ask the robot not to do an action."""
+    normalized = (user_text or "").lower().strip()
+    has_negation = re.search(r"\b(?:don't|dont|do not|never)\b", normalized)
+    if not has_negation:
+        return False
+
+    action_cues = {
+        keyword
+        for spec in SKILL_LIBRARY.values()
+        for keyword in spec["keywords"]
+    } | {"move", "go", "walk", "run", "turn", "spin", "dance"}
+    return any(_phrase_present(cue, normalized) for cue in action_cues)
+
+
+def has_robot_action_cue(user_text):
+    """Return True when text appears to ask for an available robot behavior."""
+    normalized = (user_text or "").lower().strip()
+    action_cues = {
+        keyword
+        for spec in SKILL_LIBRARY.values()
+        for keyword in spec["keywords"]
+    } | {"move", "go", "walk", "run", "turn", "spin", "dance", "act"}
+    return any(_phrase_present(cue, normalized) for cue in action_cues)
+
+
+def looks_like_non_action_question(user_text):
+    normalized = (user_text or "").lower().strip()
+    return (
+        re.match(r"^(?:what|who|where|when|why|how)\b", normalized) is not None
+        and not has_robot_action_cue(normalized)
+    )
+
+
+def no_action_interpretation(user_text, reason, confidence=0.9, source="rule"):
+    """Return a non-executing interpretation that still teaches the pipeline."""
+    return {
+        "steps": [],
+        "confidence": confidence,
+        "rationale": reason,
+        "source": source,
+        "status": "needs_revision",
+        "blocked_reason": reason,
     }
 
 
 def infer_steps_from_text(user_text):
     """Broader local chain guessing for up to three steps."""
     normalized = (user_text or "").lower().strip()
+    if detect_negated_request(normalized):
+        return no_action_interpretation(
+            user_text,
+            "The prompt appears to ask the robot not to perform an action, so no movement was sent.",
+        )
+
     split_parts = [
         p.strip(" ,.!?")
         for p in re.split(r"\b(?:and then|then|and|after that|afterwards|after|next)\b|[,;]+", normalized)
@@ -514,7 +582,7 @@ def infer_steps_from_text(user_text):
     for part in candidates:
         matched = keyword_match_skill(part)
         skill_id = matched["skill_id"]
-        if skill_id not in steps:
+        if skill_id and skill_id not in steps:
             steps.append(skill_id)
             rationales.append(f"'{part}' -> {skill_id}")
         if len(steps) >= MAX_PLAN_STEPS:
@@ -531,8 +599,15 @@ def infer_steps_from_text(user_text):
             if len(steps) >= MAX_PLAN_STEPS:
                 break
 
+    if not steps:
+        return no_action_interpretation(
+            user_text,
+            "The prompt did not clearly match one of the supported classroom skills.",
+            confidence=0.35,
+        )
+
     return {
-        "steps": steps[:MAX_PLAN_STEPS] or ["check_around"],
+        "steps": steps[:MAX_PLAN_STEPS],
         "confidence": 0.6 if len(steps) > 1 else 0.55,
         "rationale": "Built a short plan from the prompt using constrained skill matching: " + "; ".join(rationales[:MAX_PLAN_STEPS]),
         "source": "rule",
@@ -542,6 +617,18 @@ def infer_steps_from_text(user_text):
 def call_llm(user_text):
     """Interpret user's request as a short plan of skill identifiers."""
     normalized = (user_text or "").lower().strip().strip(" .!?")
+    if detect_negated_request(normalized):
+        return no_action_interpretation(
+            user_text,
+            "The prompt appears to ask the robot not to perform an action, so no movement was sent.",
+        )
+    if looks_like_non_action_question(normalized):
+        return no_action_interpretation(
+            user_text,
+            "The prompt sounds like a question rather than a request for a supported robot action.",
+            confidence=0.8,
+        )
+
     for skill_id, spec in SKILL_LIBRARY.items():
         if normalized == skill_id.replace("_", " ") or normalized in spec["keywords"]:
             return {
@@ -614,7 +701,7 @@ def call_llm(user_text):
 
         interpreted = {
             "steps": cleaned_steps,
-            "confidence": float(result.get("confidence", 0.75)),
+            "confidence": max(0.0, min(float(result.get("confidence", 0.75)), 1.0)),
             "rationale": result.get("rationale", "Mapped request to the closest supported classroom plan."),
             "source": "llm",
         }
@@ -630,12 +717,36 @@ def call_llm(user_text):
     except Exception as e:
         print(f"[LLM] Error: {e}")
         fallback = infer_steps_from_text(user_text)
-        fallback["rationale"] = f"Model request failed ({str(e)}); used constrained fallback planner."
+        fallback["rationale"] = "The language model was unavailable, so the constrained local planner was used."
         return fallback
 
 
 def plan_actions(user_text, interpretation):
     """Convert a high-level skill sequence into a concrete command plan."""
+    if interpretation.get("status") == "needs_revision":
+        reason = interpretation.get("blocked_reason") or interpretation.get("rationale") or "The prompt needs a clearer supported action."
+        return {
+            "skill_id": None,
+            "steps": [],
+            "commands": [],
+            "command_delays": [],
+            "delay": 0,
+            "emotion": "confused",
+            "explanation": "I did not send a robot movement. Try a clearer supported action like 'wave', 'sit', or 'walk forward'.",
+            "trace": {
+                "prompt": user_text,
+                "planner_source": interpretation.get("source", "rule"),
+                "skill_id": None,
+                "steps": [],
+                "confidence": round(float(interpretation.get("confidence", 0.0)), 2),
+                "rationale": reason,
+                "step_count": 0,
+                "command_count": 0,
+                "status": "needs_revision",
+            },
+            "step_summaries": [],
+        }
+
     step_ids = interpretation.get("steps")
     if not isinstance(step_ids, list) or not step_ids:
         fallback = infer_steps_from_text(user_text)
@@ -651,24 +762,33 @@ def plan_actions(user_text, interpretation):
     emotion = "curious"
     explanation_parts = []
     delay_values = []
+    command_delays = []
     included_steps = []
 
     for step_id in step_ids:
         skill = SKILL_LIBRARY[step_id]
         skill_commands = list(skill["commands"])
+        skill_delays = list(skill.get("command_delays", []))
         # Only add a skill if its whole command sequence fits in the budget.
         # Never split a skill across the cap -- that would make the spoken
         # explanation promise an action that never actually gets sent.
         if commands and len(commands) + len(skill_commands) > MAX_PLAN_COMMANDS:
             break
         commands.extend(skill_commands[:MAX_PLAN_COMMANDS])
+        for cmd_idx, _ in enumerate(skill_commands[:MAX_PLAN_COMMANDS]):
+            if cmd_idx < len(skill_delays):
+                command_delays.append(float(skill_delays[cmd_idx]))
+            else:
+                command_delays.append(float(skill.get("delay", 0)))
         included_steps.append(step_id)
         step_summaries.append({
             "skill_id": step_id,
             "commands": skill_commands,
             "explanation": skill.get("explanation", ""),
         })
-        explanation_parts.append(step_id.replace("_", " "))
+        skill_explanation = skill.get("explanation", step_id.replace("_", " "))
+        explanation_part = re.sub(r"^I'll\s+", "", skill_explanation, flags=re.IGNORECASE).rstrip(".")
+        explanation_parts.append(explanation_part)
         delay_values.append(int(skill.get("delay", 0)))
         emotion = skill.get("emotion", emotion)
 
@@ -682,6 +802,7 @@ def plan_actions(user_text, interpretation):
         "skill_id": step_ids[0],
         "steps": step_ids,
         "commands": commands,
+        "command_delays": command_delays,
         "delay": delay,
         "emotion": emotion,
         "explanation": explanation,
@@ -696,6 +817,184 @@ def plan_actions(user_text, interpretation):
             "command_count": len(commands),
         },
         "step_summaries": step_summaries,
+    }
+
+
+def matched_keywords_for_skill(skill_id, user_text):
+    normalized = (user_text or "").lower()
+    return [
+        keyword
+        for keyword in SKILL_LIBRARY[skill_id]["keywords"]
+        if _phrase_present(keyword, normalized)
+    ]
+
+
+def skill_fit_reason(skill_id, matches, selected, interpretation, plan_steps, sentiment):
+    """Explain why a skill did or did not fit in student-friendly language."""
+    label = skill_id.replace("_", " ")
+
+    if skill_id == "meme_67" and matches:
+        return "The prompt asks for the 6-7 meme routine, so the planner selects the custom playful sequence."
+    if skill_id == "meme_67":
+        return "The 6-7 routine is available as a playful custom sequence, but this prompt did not ask for it."
+    if matches and skill_id == "celebrate":
+        return "The prompt includes success or excitement cues, so celebrating is a strong match."
+    if matches:
+        return f"The prompt directly includes cue{'s' if len(matches) > 1 else ''} for {label}."
+    if selected and interpretation.get("source") == "llm":
+        return "The language interpretation layer selected this as the best supported action even without an exact keyword."
+    if selected:
+        return "The local planner selected this as the closest supported classroom action."
+    if skill_id == "wave":
+        return "Wave is friendly and safe, but the prompt does not mainly ask for greeting."
+    if skill_id == "celebrate":
+        return "Celebrate is available, but the prompt does not clearly express success or excitement."
+    if skill_id == "check_around":
+        return "Look around is a safe option, but the prompt does not clearly ask the robot to search or scan."
+    if plan_steps:
+        return "This action is available, but another supported skill matched the prompt better."
+    return "This action is available, but no clear cue in the prompt matched it."
+
+
+def score_skill_candidate(skill_id, user_text, interpretation, plan, sentiment):
+    """Score a candidate skill using visible evidence, not hidden chain-of-thought."""
+    steps = plan.get("steps", [])
+    selected = skill_id in steps
+    matches = matched_keywords_for_skill(skill_id, user_text)
+    score = 0
+
+    score += len(matches) * 3
+    if selected:
+        score += 5
+    if skill_id == "celebrate" and sentiment.get("affect") == "excited":
+        score += 3
+    if skill_id == "rest" and sentiment.get("affect") == "frustrated":
+        score += 1
+
+    if selected:
+        fit = "strong"
+    elif score >= 4:
+        fit = "medium"
+    elif matches:
+        fit = "medium"
+    else:
+        fit = "weak"
+
+    commands = SKILL_LIBRARY[skill_id]["commands"]
+    return {
+        "skill_id": skill_id,
+        "label": skill_id.replace("_", " "),
+        "selected": selected,
+        "fit": fit,
+        "score": score,
+        "matched_cues": matches[:4],
+        "available": True,
+        "commands": commands,
+        "command_text": " -> ".join(commands),
+        "reason": skill_fit_reason(skill_id, matches, selected, interpretation, steps, sentiment),
+    }
+
+
+def build_candidate_scores(user_text, sentiment, interpretation, plan):
+    """Return the most useful candidate rows for the student-facing explanation."""
+    steps = plan.get("steps", [])
+    required_ids = list(steps)
+
+    scored = [
+        score_skill_candidate(skill_id, user_text, interpretation, plan, sentiment)
+        for skill_id in SKILL_LIBRARY
+    ]
+
+    rows_by_skill = {row["skill_id"]: row for row in scored}
+    selected_rows = [
+        rows_by_skill[skill_id]
+        for skill_id in steps
+        if skill_id in rows_by_skill
+    ]
+    evidence_rows = [
+        row for row in scored
+        if row["matched_cues"] and not row["selected"]
+    ]
+    fallback_rows = [
+        row for row in scored
+        if row["skill_id"] in ("wave", "celebrate", "check_around")
+        and not row["selected"]
+        and row not in evidence_rows
+    ]
+
+    rows = selected_rows + sorted(
+        evidence_rows,
+        key=lambda row: (row["score"], len(row["matched_cues"])),
+        reverse=True
+    )
+
+    for row in fallback_rows:
+        if row["skill_id"] not in required_ids and row not in rows:
+            rows.append(row)
+        if len(rows) >= 3:
+            break
+
+    if len(rows) < 3:
+        for row in scored:
+            if row not in rows:
+                rows.append(row)
+            if len(rows) >= 3:
+                break
+
+    return rows[:3]
+
+
+def describe_intent(user_text, sentiment, plan):
+    """Create a short classroom-friendly interpretation label."""
+    if not plan.get("steps"):
+        return "The prompt needs a clearer supported robot action."
+    if sentiment.get("affect") == "excited" and "celebrate" in plan.get("steps", []):
+        return "The prompt sounds like a successful or exciting event."
+    if len(plan.get("steps", [])) > 1:
+        return "The prompt asks for more than one robot action."
+    first_step = plan["steps"][0].replace("_", " ")
+    return f"The prompt maps most closely to {first_step}."
+
+
+def build_reasoning(user_text, sentiment, interpretation, plan, serial_responses):
+    """Build a visible, structured explanation for students and logs."""
+    steps = plan.get("steps", [])
+    selected = steps[0] if steps else None
+    candidates = build_candidate_scores(user_text, sentiment, interpretation, plan)
+
+    blocked = [sr for sr in serial_responses if sr.get("blocked")]
+    failures = [sr for sr in serial_responses if sr.get("success") is False]
+    successes = [sr for sr in serial_responses if sr.get("success")]
+
+    if not plan.get("commands"):
+        validation_message = "No command was sent because the prompt needs revision."
+        validation_status = "needs_revision"
+    elif blocked:
+        validation_message = "One or more commands were blocked by the classroom safety rules."
+        validation_status = "blocked"
+    elif failures:
+        validation_message = "The plan was safe, but the robot connection did not acknowledge every command."
+        validation_status = "connection_issue"
+    elif successes:
+        validation_message = "All selected commands were in the classroom allowlist and were sent to the robot."
+        validation_status = "sent"
+    else:
+        validation_message = "All selected commands are in the classroom allowlist."
+        validation_status = "validated"
+
+    return {
+        "intent": describe_intent(user_text, sentiment, plan),
+        "status": validation_status,
+        "planner_source": interpretation.get("source", "rule"),
+        "confidence_note": "Confidence is a planner estimate, not a guarantee.",
+        "candidates": candidates,
+        "selected_skill": selected,
+        "commands": plan.get("commands", []),
+        "validation": {
+            "status": validation_status,
+            "message": validation_message,
+        },
+        "revision_tip": "If the result is not what you wanted, change the prompt by naming the desired behavior more clearly.",
     }
 
 
@@ -829,7 +1128,7 @@ def analyze_sentiment(user_text):
 
 # ─── Flask App ─────────────────────────────────────────────
 app = Flask(__name__, static_folder='.', static_url_path='')
-CORS(app)
+CORS(app, resources={r"/api/*": {"origins": [origin.strip() for origin in ALLOWED_ORIGINS if origin.strip()]}})
 
 @app.route('/')
 def index():
@@ -867,6 +1166,7 @@ def handle_command():
     interpretation = call_llm(user_text)
     plan = plan_actions(user_text, interpretation)
     commands = plan.get("commands", [])
+    command_delays = plan.get("command_delays", [])
     explanation = plan.get("explanation", "")
     emotion = plan.get("emotion", "curious")
     delay = plan.get("delay", 0)
@@ -887,8 +1187,9 @@ def handle_command():
         serial_responses.append({"cmd": cmd_clean, **result})
 
         # Wait between commands so robot can finish the action
-        if idx < len(commands) - 1 and delay > 0:
-            wait_time = min(delay, 5)  # Cap at 5 seconds
+        wait_after = command_delays[idx] if idx < len(command_delays) else delay
+        if idx < len(commands) - 1 and wait_after > 0:
+            wait_time = min(wait_after, 5)  # Cap at 5 seconds
             print(f"[WAIT] {wait_time}s before next command...")
             time.sleep(wait_time)
 
@@ -899,14 +1200,18 @@ def handle_command():
     elif sentiment["affect"] == "uncertain":
         explanation += " If you want, try a simple command first like 'walk forward' or 'sit'."
 
+    reasoning = build_reasoning(user_text, sentiment, interpretation, plan, serial_responses)
+
     response_data = {
         "input": user_text,
         "explanation": explanation,
         "emotion": emotion,
         "commands": commands,
+        "command_delays": command_delays,
         "delay": delay,
         "serial_responses": serial_responses,
         "trace": trace,
+        "reasoning": reasoning,
         "sentiment": sentiment,
     }
 
@@ -919,9 +1224,11 @@ def handle_command():
             "skill_id": plan.get("skill_id"),
             "steps": plan.get("steps", []),
             "commands": commands,
+            "command_delays": command_delays,
             "delay": delay,
             "emotion": emotion,
         },
+        "reasoning": reasoning,
         "serial_responses": serial_responses,
         "latency_ms": round((time.time() - started_at) * 1000, 1),
     })

@@ -10,3 +10,7 @@ venv/
 paper/
 interaction_logs.jsonl
 AI_Summit___Justin_Poole-2
+demo_results.jsonl
+.claude
+outputs/
+work/
