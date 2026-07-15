@@ -97,6 +97,7 @@ Create a `.env` file with:
 ```env
 OPENROUTER_API_KEY=your_openrouter_key_here
 OPENROUTER_MODEL=openai/gpt-4o-mini
+OPENROUTER_VISION_MODEL=openai/gpt-4o-mini
 COM_PORT=COM5
 BAUD_RATE=115200
 ```
@@ -165,6 +166,7 @@ This project can still move physical hardware. Test carefully, keep clear space 
 
 - `GET /api/status`: connection status, current port, model, serial health
 - `POST /api/command`: natural-language command input
+- `POST /api/scene-reasoning`: camera-grounded, non-executing plan preview
 - `POST /api/direct`: raw Petoi serial command
 - `GET /api/joints`: query current joint angles
 - `POST /api/stop`: emergency stop
@@ -203,6 +205,22 @@ These scripts are useful during setup:
 - Keep the face centered and reasonably close to the camera.
 - Reduce clutter or skin-colored objects in the background.
 
+### Scene-aware reasoning preview
+
+Start the camera, enable **Ground this command in the camera view**, and send
+a voice or text command. The browser captures one compressed still frame and
+sends it with the command to `POST /api/scene-reasoning`. A vision-capable
+OpenRouter model reports visible evidence, robot-position uncertainty, command
+grounding, and a proposed allowlisted plan.
+
+This experimental endpoint never sends commands to the robot. It records the
+proposed steps and commands in the interaction log with `executed: false` so
+the reasoning can be evaluated before closed-loop movement is introduced.
+While scene context is enabled, face-tracking servo updates and direct serial
+input are also paused.
+Set `OPENROUTER_VISION_MODEL` if the normal language model does not accept
+image input.
+
 ### Serial commands fail intermittently
 
 - Reconnect the robot Bluetooth/serial link.
@@ -225,4 +243,3 @@ These scripts are useful during setup:
 - Add better platform-specific serial setup notes
 - Add structured logging and request error reporting
 - Add a real face-detection model for camera mode
-

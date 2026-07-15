@@ -131,6 +131,13 @@
                         <input type="text" class="manual-input" id="manual-input" placeholder="Try: walk forward and wave" autocomplete="off">
                         <button class="send-btn" id="btn-send-manual">Send</button>
                     </div>
+                    <label class="scene-context-option">
+                        <input type="checkbox" id="scene-context-enabled">
+                        <span>
+                            <strong>Ground this command in the camera view</strong>
+                            <small>Experimental reasoning preview only. The scene-aware plan will not move the robot.</small>
+                        </span>
+                    </label>
                     <div class="live-transcript" id="live-transcript"></div>
                 </div>
 
@@ -180,8 +187,8 @@
                 <section class="workspace-card camera-card">
                     <div class="camera-card-header">
                         <div>
-                            <p class="composer-title">3. Optional Camera Demo</p>
-                            <p class="composer-subtitle">Shows face tracking and intended pan/tilt movement.</p>
+                            <p class="composer-title">3. Camera Context</p>
+                            <p class="composer-subtitle">Provides a current scene snapshot for grounded reasoning.</p>
                         </div>
                         <button class="cam-btn" id="btn-start-camera">
                             <span>📷</span> Start Camera
@@ -214,7 +221,7 @@
                         </div>
                     </div>
                     <div class="camera-note">
-                        <p>The dot marks the estimated face center. The dashed box shows the tracked region. If the robot is not connected, the gauges below still show the intended movement target.</p>
+                        <p>Turn on “Ground this command in the camera view” to analyze one current frame with a command. Scene-aware mode proposes a plan but does not execute it. The existing face-tracking overlay remains available as a separate camera demonstration.</p>
                     </div>
                     <div class="servo-display">
                         <div class="servo-gauge">

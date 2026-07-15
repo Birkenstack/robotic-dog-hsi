@@ -46,6 +46,7 @@ const els = {
     servoTiltValue: $('servo-tilt-value'),
     manualInput: $('manual-input'),
     btnSendManual: $('btn-send-manual'),
+    sceneContextEnabled: $('scene-context-enabled'),
     statusBt: $('status-bt'),
     statusBtLabel: $('status-bt-label'),
     btnEmergency: $('btn-emergency'),
@@ -215,8 +216,11 @@ function renderReasoning(reasoning) {
         ? reasoning.commands.join(' → ')
         : 'No robot command sent';
 
+    const sceneMarkup = renderSceneContext(reasoning.scene);
+
     return `
         <div class="reasoning-card">
+            ${sceneMarkup}
             <div class="reasoning-row">
                 <span>What I understood</span>
                 <p>${escapeHtml(reasoning.intent || 'The prompt needs a clearer supported action.')}</p>
@@ -236,6 +240,85 @@ function renderReasoning(reasoning) {
             </div>
         </div>
     `;
+}
+
+function renderSceneContext(scene) {
+    if (!scene) return '';
+
+    const observations = Array.isArray(scene.observations) ? scene.observations : [];
+    const uncertainties = Array.isArray(scene.uncertainties) ? scene.uncertainties : [];
+    const observationMarkup = observations.length
+        ? `<ul class="scene-list">${observations.map(item => `
+            <li>
+                <strong>${escapeHtml(item.label || 'Visible item')}</strong>
+                <span>${escapeHtml(item.location || 'location uncertain')} · ${escapeHtml(item.confidence || 'confidence unknown')}</span>
+                ${item.evidence ? `<small>${escapeHtml(item.evidence)}</small>` : ''}
+            </li>
+        `).join('')}</ul>`
+        : '<p>No reliable objects were reported from the frame.</p>';
+    const uncertaintyMarkup = uncertainties.length
+        ? `<ul class="scene-uncertainties">${uncertainties.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`
+        : '<p>No additional uncertainty was reported.</p>';
+    const robot = scene.robot || {};
+    const grounding = scene.grounding || {};
+
+    return `
+        <div class="scene-reasoning-banner">
+            <span>Camera-grounded preview</span>
+            <strong>No robot movement was executed</strong>
+        </div>
+        <div class="reasoning-row">
+            <span>What I observed</span>
+            ${observationMarkup}
+        </div>
+        <div class="reasoning-row">
+            <span>Robot location</span>
+            <p>${escapeHtml(robot.summary || 'The robot location or heading could not be confirmed.')}</p>
+        </div>
+        <div class="reasoning-row">
+            <span>How the command is grounded</span>
+            <p>${escapeHtml(grounding.summary || 'The command could not yet be tied to a visible target.')}</p>
+        </div>
+        <div class="reasoning-row">
+            <span>Visual uncertainty</span>
+            ${uncertaintyMarkup}
+        </div>
+    `;
+}
+
+function captureCameraFrame() {
+    if (!state.cameraActive || !els.cameraFeed.videoWidth || !els.cameraFeed.videoHeight) {
+        throw new Error('Start the camera before using scene-grounded reasoning.');
+    }
+
+    const maxWidth = 960;
+    const scale = Math.min(1, maxWidth / els.cameraFeed.videoWidth);
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(els.cameraFeed.videoWidth * scale);
+    canvas.height = Math.round(els.cameraFeed.videoHeight * scale);
+    canvas.getContext('2d').drawImage(els.cameraFeed, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL('image/jpeg', 0.78);
+}
+
+async function requestNaturalLanguageCommand(text) {
+    const useScene = Boolean(els.sceneContextEnabled?.checked);
+    const payload = { text };
+    let endpoint = 'command';
+
+    if (useScene) {
+        payload.image = captureCameraFrame();
+        endpoint = 'scene-reasoning';
+        addLog('📷 Captured current frame for a non-executing reasoning preview', 'system');
+    }
+
+    const res = await fetch(`${API_BASE}/${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+    return data;
 }
 
 function renderCommandResponse(data) {
@@ -342,13 +425,7 @@ async function processVoiceCommand(text) {
     addLog(`🎤 "${text}"`, 'voice');
 
     try {
-        const res = await fetch(`${API_BASE}/command`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text })
-        });
-
-        const data = await res.json();
+        const data = await requestNaturalLanguageCommand(text);
 
         els.robotEmoji.textContent = EMOJIS[data.emotion] || '🐕';
         renderCommandResponse(data);
@@ -408,7 +485,12 @@ async function startCamera() {
         els.btnStartCamera.innerHTML = '<span>⏹️</span> Stop Camera';
         els.btnStartCamera.classList.add('active');
 
-        addLog('📷 Camera active — tracking faces via skin detection', 'robot');
+        addLog(
+            els.sceneContextEnabled?.checked
+                ? '📷 Camera active — scene frame ready; movement paused'
+                : '📷 Camera active — tracking faces via skin detection',
+            'robot'
+        );
 
         // Start tracking loop
         runTrackingLoop(canvas);
@@ -446,6 +528,14 @@ function runTrackingLoop(canvas) {
 
     function detect() {
         if (!state.cameraActive) return;
+
+        if (els.sceneContextEnabled?.checked) {
+            ctx.clearRect(0, 0, W, H);
+            els.trackingStatus.className = 'tracking-status active';
+            els.trackingStatus.querySelector('span:last-child').textContent = 'Scene frame ready';
+            state.trackingLoop = requestAnimationFrame(detect);
+            return;
+        }
 
         // Draw downscaled video frame
         tempCtx.drawImage(video, 0, 0, sw, sh);
@@ -589,6 +679,19 @@ async function sendTrackingCommand(pan, tilt) {
 }
 
 els.btnStartCamera.addEventListener('click', startCamera);
+els.sceneContextEnabled?.addEventListener('change', () => {
+    if (!state.cameraActive) return;
+    const label = els.trackingStatus.querySelector('span:last-child');
+    if (els.sceneContextEnabled.checked) {
+        els.trackingStatus.className = 'tracking-status active';
+        label.textContent = 'Scene frame ready';
+        addLog('📷 Scene preview enabled — face-tracking movement paused', 'system');
+    } else {
+        els.trackingStatus.className = 'tracking-status';
+        label.textContent = 'Looking for a face';
+        addLog('📷 Face-tracking camera demo enabled', 'system');
+    }
+});
 
 // ═══════════════════════════════════════════════════════════
 //  MANUAL MODE
@@ -609,6 +712,9 @@ async function sendManualCommand(cmd) {
         const isSerial = /^[a-zA-Z]\d/.test(cmd) || /^k[a-z]/.test(cmd) || cmd === 'd' || cmd === 'j' || cmd === 'G' || cmd === 'p';
 
         if (isSerial) {
+            if (els.sceneContextEnabled?.checked) {
+                throw new Error('Direct robot commands are disabled during scene-reasoning preview.');
+            }
             setTranscriptState(`"${cmd}"`, 'Sent directly', 'done');
             const res = await fetch(`${API_BASE}/direct`, {
                 method: 'POST',
@@ -620,12 +726,7 @@ async function sendManualCommand(cmd) {
         } else {
             setTranscriptState(`"${cmd}"`, 'Thinking...', 'pending');
             // Route through LLM
-            const res = await fetch(`${API_BASE}/command`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ text: cmd })
-            });
-            const data = await res.json();
+            const data = await requestNaturalLanguageCommand(cmd);
             els.robotEmoji.textContent = EMOJIS[data.emotion] || '🐕';
             renderCommandResponse(data);
             setTranscriptState(`"${cmd}"`, 'Done', 'done');

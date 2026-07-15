@@ -1346,6 +1346,86 @@ body::before {
     color: var(--text-secondary);
 }
 
+.scene-context-option {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin-top: 12px;
+    padding: 12px 14px;
+    border: 1px solid rgba(29, 78, 216, 0.12);
+    border-radius: 14px;
+    background: rgba(29, 78, 216, 0.035);
+    cursor: pointer;
+}
+
+.scene-context-option input {
+    margin-top: 3px;
+    accent-color: var(--accent);
+}
+
+.scene-context-option span {
+    display: grid;
+    gap: 3px;
+}
+
+.scene-context-option strong {
+    font-size: 13px;
+    color: var(--text-primary);
+}
+
+.scene-context-option small {
+    font-size: 11px;
+    line-height: 1.45;
+    color: var(--text-secondary);
+}
+
+.scene-reasoning-banner {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: rgba(29, 78, 216, 0.07);
+    border: 1px solid rgba(29, 78, 216, 0.12);
+    font-size: 11px;
+    color: var(--accent);
+}
+
+.scene-reasoning-banner strong {
+    color: var(--text-primary);
+}
+
+.scene-list,
+.scene-uncertainties {
+    display: grid;
+    gap: 7px;
+    margin: 0;
+    padding-left: 18px;
+}
+
+.scene-list li {
+    color: var(--text-secondary);
+}
+
+.scene-list strong,
+.scene-list span,
+.scene-list small {
+    display: block;
+}
+
+.scene-list strong {
+    color: var(--text-primary);
+    font-size: 12px;
+}
+
+.scene-list span,
+.scene-list small,
+.scene-uncertainties li {
+    font-size: 11px;
+    line-height: 1.45;
+    color: var(--text-secondary);
+}
+
 .servo-display {
     max-width: none;
     margin: 0;

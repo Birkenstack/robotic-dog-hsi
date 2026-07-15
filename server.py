@@ -32,6 +32,7 @@ load_dotenv()
 # ─── Config ────────────────────────────────────────────────
 API_KEY = os.getenv("OPENROUTER_API_KEY")
 MODEL = os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini")
+VISION_MODEL = os.getenv("OPENROUTER_VISION_MODEL", MODEL)
 COM_PORT = os.getenv("COM_PORT", "COM5")
 BAUD_RATE = int(os.getenv("BAUD_RATE", "115200"))
 LOCK_TIMEOUT = 5        # seconds — never wait longer than this for the lock
@@ -725,6 +726,157 @@ def call_llm(user_text):
         return fallback
 
 
+def _clean_json_response(content):
+    """Remove common Markdown wrappers before parsing a model JSON response."""
+    content = (content or "").strip()
+    if content.startswith("```"):
+        lines = [line for line in content.split("\n") if not line.strip().startswith("```")]
+        content = "\n".join(lines).strip()
+    return json.loads(content)
+
+
+def _scene_text(value, default="", limit=500):
+    """Normalize untrusted model fields for logging and browser display."""
+    text = str(value).strip() if value is not None else default
+    return text[:limit]
+
+
+def _scene_fallback(user_text, reason):
+    """Return an honest text-only preview when visual analysis is unavailable."""
+    interpretation = call_llm(user_text)
+    return {
+        "observations": [],
+        "robot": {
+            "visible": False,
+            "summary": "The camera frame was not analyzed, so the robot position and heading are unknown.",
+            "confidence": "unknown",
+        },
+        "grounding": {
+            "summary": "A text-only plan was considered, but it is not grounded in visible scene evidence.",
+        },
+        "uncertainties": [reason],
+        "proposed_steps": interpretation.get("steps", []),
+        "decision_summary": "Keep this as a preview until a vision-capable model confirms the scene.",
+        "verification": "Configure a vision-capable model, capture another frame, and analyze again.",
+        "source": "text_fallback",
+        "confidence": 0.0,
+    }
+
+
+def analyze_scene(user_text, image_data_url):
+    """Combine a command and still image into a non-executing scene plan."""
+    if not API_KEY:
+        return _scene_fallback(
+            user_text,
+            "OPENROUTER_API_KEY is not configured, so visual evidence could not be evaluated.",
+        )
+
+    allowed_skills = ", ".join(sorted(ALLOWED_SKILL_IDS))
+    prompt = f"""
+Analyze this fixed overhead or elevated webcam frame in relation to the user's robot command.
+User command: {user_text}
+
+Return JSON only with this shape:
+{{
+  "observations": [{{"label":"...", "location":"...", "confidence":"high|medium|low", "evidence":"..."}}],
+  "robot": {{"visible":true, "summary":"position and heading evidence", "confidence":"high|medium|low"}},
+  "grounding": {{"summary":"how visible evidence relates to the command"}},
+  "uncertainties": ["..."],
+  "proposed_steps": ["allowed_skill_id"],
+  "decision_summary": "short evidence-based plan summary",
+  "verification": "what a later frame should verify",
+  "confidence": 0.0
+}}
+
+Only use proposed_steps from this allowlist: {allowed_skills}.
+Use at most three steps. Do not invent coordinates, distances, objects, or robot orientation.
+If the robot, target, route, or heading is unclear, say so explicitly and prefer no movement step.
+This is an explainable preview: do not claim that any action was executed.
+""".strip()
+
+    try:
+        response = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {API_KEY}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": "http://localhost:8080",
+                "X-Title": "Petoi Bittle X Scene Reasoning",
+            },
+            json={
+                "model": VISION_MODEL,
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": image_data_url}},
+                    ],
+                }],
+                "temperature": 0.1,
+                "max_tokens": 900,
+            },
+            timeout=30,
+        )
+        response.raise_for_status()
+        result = _clean_json_response(response.json()["choices"][0]["message"]["content"])
+
+        observations = []
+        for item in result.get("observations", [])[:8]:
+            if not isinstance(item, dict):
+                continue
+            observations.append({
+                "label": _scene_text(item.get("label"), "Visible item", 100),
+                "location": _scene_text(item.get("location"), "location uncertain", 160),
+                "confidence": _scene_text(item.get("confidence"), "unknown", 20),
+                "evidence": _scene_text(item.get("evidence"), "", 240),
+            })
+
+        raw_robot = result.get("robot") if isinstance(result.get("robot"), dict) else {}
+        raw_grounding = result.get("grounding") if isinstance(result.get("grounding"), dict) else {}
+        proposed_steps = []
+        for step in result.get("proposed_steps", [])[:MAX_PLAN_STEPS]:
+            step_id = str(step).strip()
+            if step_id in ALLOWED_SKILL_IDS and step_id not in proposed_steps:
+                proposed_steps.append(step_id)
+
+        return {
+            "observations": observations,
+            "robot": {
+                "visible": bool(raw_robot.get("visible")),
+                "summary": _scene_text(
+                    raw_robot.get("summary"),
+                    "The robot position and heading could not be confirmed.",
+                ),
+                "confidence": _scene_text(raw_robot.get("confidence"), "unknown", 20),
+            },
+            "grounding": {
+                "summary": _scene_text(
+                    raw_grounding.get("summary"),
+                    "The command could not be tied to reliable visible evidence.",
+                ),
+            },
+            "uncertainties": [
+                _scene_text(item, limit=300)
+                for item in result.get("uncertainties", [])[:6]
+                if str(item).strip()
+            ],
+            "proposed_steps": proposed_steps,
+            "decision_summary": _scene_text(
+                result.get("decision_summary"),
+                "No scene-grounded movement was proposed.",
+            ),
+            "verification": _scene_text(
+                result.get("verification"),
+                "Capture another frame before any movement is enabled.",
+            ),
+            "source": "vision_llm",
+            "confidence": max(0.0, min(float(result.get("confidence", 0.0)), 1.0)),
+        }
+    except Exception as exc:
+        print(f"[VISION] Scene analysis failed: {exc}")
+        return _scene_fallback(user_text, f"Visual analysis failed: {exc}")
+
+
 def plan_actions(user_text, interpretation):
     """Convert a high-level skill sequence into a concrete command plan."""
     if interpretation.get("status") == "needs_revision":
@@ -1149,8 +1301,90 @@ def status():
         "connected": serial_mgr.connected,
         "port": COM_PORT,
         "model": MODEL,
+        "vision_model": VISION_MODEL,
         "health": health
     })
+
+
+@app.route('/api/scene-reasoning', methods=['POST'])
+def scene_reasoning_preview():
+    """Analyze one camera frame and propose an allowlisted plan without executing it."""
+    started_at = time.time()
+    data = request.get_json(silent=True) or {}
+    user_text = str(data.get("text", "")).strip()
+    image_data_url = data.get("image", "")
+
+    if not user_text:
+        return jsonify({"error": "No text provided"}), 400
+    if not isinstance(image_data_url, str) or not image_data_url.startswith(
+        ("data:image/jpeg;base64,", "data:image/png;base64,", "data:image/webp;base64,")
+    ):
+        return jsonify({"error": "A JPEG, PNG, or WebP camera frame is required"}), 400
+    if len(image_data_url) > 6_500_000:
+        return jsonify({"error": "Camera frame is too large"}), 413
+
+    sentiment = analyze_sentiment(user_text)
+    scene = analyze_scene(user_text, image_data_url)
+    proposed_steps = scene.get("proposed_steps", [])
+    if proposed_steps:
+        interpretation = {
+            "steps": proposed_steps,
+            "confidence": scene.get("confidence", 0.0),
+            "rationale": scene.get("decision_summary", "Scene-aware plan preview."),
+            "source": scene.get("source", "vision_llm"),
+        }
+    else:
+        interpretation = no_action_interpretation(
+            user_text,
+            scene.get("decision_summary", "The scene does not support a safe movement yet."),
+            confidence=scene.get("confidence", 0.0),
+        )
+        interpretation["source"] = scene.get("source", "vision_llm")
+
+    plan = plan_actions(user_text, interpretation)
+    reasoning = build_reasoning(user_text, sentiment, interpretation, plan, [])
+    reasoning["scene"] = scene
+    reasoning["intent"] = scene.get("decision_summary", reasoning["intent"])
+    reasoning["commands"] = plan.get("commands", [])
+    reasoning["validation"] = {
+        "status": "scene_preview",
+        "message": "The proposed actions use the classroom allowlist, but scene-aware preview mode did not execute them.",
+    }
+    reasoning["revision_tip"] = scene.get(
+        "verification",
+        "Capture another frame and verify the scene before enabling movement.",
+    )
+
+    trace = dict(plan.get("trace", {}))
+    trace["status"] = "scene_preview"
+    trace["planner_source"] = scene.get("source", trace.get("planner_source", "vision_llm"))
+
+    response_data = {
+        "input": user_text,
+        "explanation": f"Scene-aware preview: {scene.get('decision_summary', 'No movement was selected.')}",
+        "emotion": "curious",
+        "commands": [],
+        "proposed_commands": plan.get("commands", []),
+        "command_delays": [],
+        "delay": 0,
+        "serial_responses": [],
+        "trace": trace,
+        "reasoning": reasoning,
+        "sentiment": sentiment,
+        "preview_only": True,
+    }
+
+    append_interaction_log({
+        "type": "scene_reasoning_preview",
+        "input": user_text,
+        "vision_model": VISION_MODEL,
+        "scene": scene,
+        "proposed_steps": plan.get("steps", []),
+        "proposed_commands": plan.get("commands", []),
+        "executed": False,
+        "latency_ms": round((time.time() - started_at) * 1000, 1),
+    })
+    return jsonify(response_data)
 
 @app.route('/api/command', methods=['POST'])
 def handle_command():
